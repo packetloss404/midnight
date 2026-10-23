@@ -1,0 +1,1749 @@
+openapi: 3.1.0
+info:
+  title: Midnight Control Plane API
+  version: 0.1.0-alpha
+  summary: Phase 0 Alpha REST API for the Midnight self-hosted PaaS control plane.
+  description: |
+    `/api/v1alpha` is the Phase 0 Alpha contract for Midnight. It is **not stable**:
+    additive changes ship without notice; renames and deletions remain possible until
+    `/api/v1`. The schema, error envelope, idempotency semantics, operation lifecycle,
+    cursor pagination, and rate-limit headers documented here are panel-locked and
+    will be carried forward through the v1 graduation rubric.
+
+    Panel-locked invariants reflected in this document:
+
+      * URL-path versioning only; no media-type or header versioning.
+      * Field naming = `snake_case` (JSON wire format).
+      * Stable error envelope: `code`, `message`, `request_id`, `docs_url`, optional `details`.
+      * Mutating async endpoints return `202 Accepted` with `Location: /api/v1alpha/operations/{op_id}` and the full Operation in the body.
+      * `Idempotency-Key` is required on every `POST/PATCH/DELETE`. Scope = `(server_actor, canonical_tenant, method, path_template, client_key)` with an immutable attempt generation. TTL 24h.
+      * Cursor pagination uses opaque base64url, server-signed (HMAC). `next_cursor: null` denotes end. `limit` defaults 50, max 200. No `total_count`.
+      * Optimistic concurrency uses `If-Match: <resource_version>`; mismatch returns `412 RESOURCE_VERSION_MISMATCH`.
+      * Rate-limit headers: `RateLimit-Limit`, `RateLimit-Remaining`, `RateLimit-Reset`. `Retry-After` is always integer seconds.
+      * `X-Request-Id` is always emitted and equals the body `request_id`.
+  contact:
+    name: Midnight Maintainers
+    url: https://midnight.dev
+    email: security@midnight.dev
+  license:
+    name: Apache-2.0
+    identifier: Apache-2.0
+  termsOfService: https://midnight.dev/terms
+
+servers:
+  - url: https://{host}/api/v1alpha
+    description: Self-hosted Midnight control plane.
+    variables:
+      host:
+        default: midnight.local
+        description: Operator-controlled hostname for the Midnight control plane.
+
+tags:
+  - name: bootstrap
+    description: One-shot bootstrap admin token consumption.
+  - name: compat
+    description: Compatibility/version-skew negotiation.
+  - name: workspaces
+    description: Workspace (account/team boundary) resources.
+  - name: projects
+    description: Project resources.
+  - name: environments
+    description: Environment resources within a project.
+  - name: services
+    description: Deployable service resources.
+  - name: deployments
+    description: Deployment lifecycle and history.
+  - name: domains
+    description: Domain bindings (generated and custom).
+  - name: variables
+    description: Plain, secret, sealed, shared, reference, and system variables.
+  - name: operations
+    description: Async operation polling and SSE streams.
+  - name: audit
+    description: Hash-chained audit log export.
+  - name: webhooks
+    description: Inbound (provider) and outbound (subscriber) webhook plumbing.
+
+security:
+  - bearerAuth: []
+
+x-rate-limit-classes:
+  user: 600
+  service-account: 1200
+  cli: 600
+  mcp: 300
+  webhook-receiver: 6000
+  git-provider: 1200
+  agent: 12000
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: midn_<class>_<26-char Crockford base32>
+      description: |
+        Panel-locked: `Authorization: Bearer <token>` only. `X-Midnight-Token` is rejected
+        with `AUTH_TOKEN_HEADER_INVALID`. Tokens match
+        `^midn_(admin|user|sa|agent|mcp)_[0-9A-HJKMNP-TV-Z]{26}$`. Tokens are stored as
+        `sha256(token)`; the public 6-char prefix surfaces in UI/audit.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      description: |
+        Required on every `POST/PATCH/DELETE`. Scope = `(token_id, method, path_template)`.
+        TTL 24h. Body hash = SHA-256 over RFC 8785 canonical JSON. Replay returns the
+        identical response with header `Idempotent-Replayed: true`. Concurrent in-flight
+        returns `409 IDEMPOTENCY_REQUEST_IN_PROGRESS` with `Retry-After`. Reuse with a
+        different body returns `409 IDEMPOTENCY_KEY_REUSED`.
+      schema:
+        type: string
+        format: uuid
+        minLength: 1
+        maxLength: 200
+
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: |
+        Optimistic concurrency. Send the resource's current `resource_version`. Mismatch
+        returns `412 RESOURCE_VERSION_MISMATCH`. Required on high-risk updates.
+      schema:
+        type: string
+        pattern: '^rv_[0-9A-HJKMNP-TV-Z]{1,32}$'
+
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: |
+        Opaque base64url, server-signed (HMAC). Tampering returns `400 INVALID_CURSOR`.
+        Cursors stable for >= 1 hour. Forward-only in v1alpha.
+      schema:
+        type: string
+        format: byte
+        maxLength: 1024
+
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Default 50; hard cap 200. Values above 200 are clamped and a `Warning` header is emitted.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+
+    PathId:
+      name: id
+      in: path
+      required: true
+      description: Resource ID `<prefix>_<26-char Crockford base32 ULID>`. Total length <= 32.
+      schema:
+        type: string
+        pattern: '^[a-z]{2,4}_[0-9A-HJKMNP-TV-Z]{26}$'
+        maxLength: 32
+
+    LastEventId:
+      name: Last-Event-ID
+      in: header
+      required: false
+      description: |
+        SSE reconnect hint. Server replays events strictly after this id and continues
+        the stream live. Required header for reconnect; absence means "from beginning".
+      schema:
+        type: string
+        maxLength: 128
+
+  headers:
+    XRequestId:
+      description: |
+        Always emitted. Equal to body `request_id`. A well-formed inbound `X-Request-Id`
+        (ULID or UUIDv4) is echoed; otherwise the server generates a fresh ULID.
+      schema:
+        type: string
+      required: true
+    RateLimitLimit:
+      description: Window budget for the actor's rate-limit class.
+      schema: { type: integer, minimum: 1 }
+    RateLimitRemaining:
+      description: Remaining budget in the current window.
+      schema: { type: integer, minimum: 0 }
+    RateLimitReset:
+      description: Unix seconds at which the window resets.
+      schema: { type: integer, minimum: 0 }
+    RetryAfter:
+      description: Always integer seconds. Used for 429 and for `409 IDEMPOTENCY_REQUEST_IN_PROGRESS`.
+      schema: { type: integer, minimum: 0 }
+    Location:
+      description: Operation URL for `202 Accepted` responses.
+      schema:
+        type: string
+        format: uri-reference
+    IdempotentReplayed:
+      description: Present and `true` when the response is a replay of an idempotent prior result.
+      schema:
+        type: string
+        enum: ["true"]
+    AdaptiveBackoffHint:
+      description: |
+        Server-suggested polling backoff in seconds (1s -> 30s adaptive). Clients SHOULD
+        honor this; clients MUST honor `Retry-After`.
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 30
+
+  schemas:
+    ResourceId:
+      type: string
+      description: '`<prefix>_<26-char Crockford base32 ULID>`. Total length <= 32. Reserved prefixes: prj, env, svc, dep, op, job, dom, vol, var, tok, usr, sa, tpl, evt, idem, plan, inst.'
+      pattern: '^[a-z]{2,4}_[0-9A-HJKMNP-TV-Z]{26}$'
+      maxLength: 32
+      examples: ["svc_01HZX9C6F7G8H9JKMNPQRSTVWX"]
+
+    ResourceVersion:
+      type: string
+      description: Opaque monotonic version token used in `If-Match`.
+      pattern: '^rv_[0-9A-HJKMNP-TV-Z]{1,32}$'
+      examples: ["rv_01HZXA5KJM2YQ7N4FBCDEFGHJK"]
+
+    Timestamp:
+      type: string
+      format: date-time
+      description: RFC 3339 / ISO 8601 timestamp in UTC.
+
+    Cursor:
+      type: object
+      description: Opaque server-signed cursor. Clients MUST treat it as a black box.
+      required: [value]
+      properties:
+        value:
+          type: string
+          format: byte
+          maxLength: 1024
+          description: base64url-encoded HMAC-signed payload.
+
+    Error:
+      type: object
+      description: Panel-locked error envelope. ALL non-2xx responses use this shape.
+      required: [code, message, request_id, docs_url]
+      properties:
+        code:
+          type: string
+          description: Flat `SCREAMING_SNAKE_CASE` code from the additive-only registry.
+          pattern: '^[A-Z][A-Z0-9_]+$'
+          examples: ["IDEMPOTENCY_KEY_REUSED", "RESOURCE_VERSION_MISMATCH"]
+        message:
+          type: string
+          description: Human-readable, redaction-safe summary. Never includes secrets or PII.
+          maxLength: 1024
+        request_id:
+          type: string
+          description: Echoed in `X-Request-Id`; correlated to audit/operation/webhook events.
+        docs_url:
+          type: string
+          format: uri
+          description: Permalink into the docs error registry for this code.
+        details:
+          type: object
+          description: Optional structured diagnostic context. Shape is per-code and additive.
+          additionalProperties: true
+
+    RateLimit:
+      type: object
+      description: Mirrored client-readable rate-limit budget; same semantics as the response headers.
+      properties:
+        limit: { type: integer }
+        remaining: { type: integer }
+        reset: { type: integer, description: Unix seconds. }
+
+    Operation:
+      type: object
+      description: |
+        Async operation handle. Returned in the body of every `202 Accepted`. Survives
+        as long as `idempotency_key.expiry >= operation.expiry` (panel-locked invariant).
+      required: [id, kind, state, target, request_id, created_at, expires_at]
+      properties:
+        id:
+          allOf: [{ $ref: '#/components/schemas/ResourceId' }]
+          description: '`op_*`'
+        kind:
+          type: string
+          description: Action kind (e.g. `service.deploy`, `service.rollback`, `domain.verify`).
+        state:
+          type: string
+          enum: [PENDING, RUNNING, SUCCEEDED, FAILED, CANCELED]
+        target:
+          type: object
+          required: [kind, id]
+          properties:
+            kind: { type: string, examples: ["service", "deployment", "domain"] }
+            id: { $ref: '#/components/schemas/ResourceId' }
+        actor:
+          type: object
+          properties:
+            id: { $ref: '#/components/schemas/ResourceId' }
+            kind: { type: string, enum: [user, service_account, agent, system] }
+            token_prefix: { type: string, minLength: 6, maxLength: 6 }
+        idempotency_key: { type: string, nullable: true }
+        progress:
+          type: object
+          description: Optional structured progress; shape is per-kind.
+          additionalProperties: true
+        result:
+          type: object
+          description: Set when `state == SUCCEEDED`. Shape is per-kind.
+          additionalProperties: true
+          nullable: true
+        error:
+          allOf: [{ $ref: '#/components/schemas/Error' }]
+          nullable: true
+          description: Set when `state in (FAILED, CANCELED-due-to-failure)`.
+        request_id: { type: string }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+        expires_at: { $ref: '#/components/schemas/Timestamp' }
+      x-event-stream:
+        sse: /api/v1alpha/operations/{id}/events
+
+    Deployment:
+      type: object
+      description: Immutable deploy attempt. Public state stays small and user-meaningful.
+      required: [id, service_id, environment_id, state, created_at, request_id]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: deployment }
+        resource_version: { $ref: '#/components/schemas/ResourceVersion' }
+        service_id: { $ref: '#/components/schemas/ResourceId' }
+        environment_id: { $ref: '#/components/schemas/ResourceId' }
+        project_id: { $ref: '#/components/schemas/ResourceId' }
+        sequence:
+          type: integer
+          format: int64
+          description: Monotonic deploy sequence (`bigserial`); used for arbitration, not wall-clock time.
+        state:
+          type: string
+          enum:
+            - QUEUED
+            - BUILDING
+            - DEPLOYING
+            - ACTIVE
+            - SUPERSEDED
+            - FAILED
+            - CANCELING
+            - CANCELED
+            - REMOVING
+            - REMOVED
+        reason_code:
+          type: string
+          description: Set when `state in (FAILED, CANCELED)`. From the failure-classification registry.
+          nullable: true
+        snapshot:
+          type: object
+          required: [source_sha, builder, image_digest]
+          properties:
+            source_sha: { type: string }
+            builder:
+              type: object
+              properties:
+                type: { type: string, enum: [dockerfile, railpack, nixpacks, image] }
+                version: { type: string }
+                digest: { type: string }
+                plan: { type: object, additionalProperties: true }
+            base_image_digests:
+              type: array
+              items: { type: string }
+            image_digest: { type: string }
+            resolved_variables_ref:
+              type: string
+              description: Content-addressed reference to resolved variables; never plaintext.
+        instances:
+          type: object
+          properties:
+            ready: { type: integer, minimum: 0 }
+            desired: { type: integer, minimum: 0 }
+        timeline_url:
+          type: string
+          format: uri-reference
+        logs_url:
+          type: string
+          format: uri-reference
+          description: SSE log stream for this deployment.
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        promoted_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+        ended_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+        request_id: { type: string }
+
+    Service:
+      type: object
+      required: [id, name, environment_id, project_id, resource_version]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: service }
+        resource_version: { $ref: '#/components/schemas/ResourceVersion' }
+        name:
+          type: string
+          description: RFC-1035 valid slug (rejected at create otherwise).
+          pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$'
+        environment_id: { $ref: '#/components/schemas/ResourceId' }
+        project_id: { $ref: '#/components/schemas/ResourceId' }
+        type:
+          type: string
+          enum: [web, worker, cron, db_template]
+        spec:
+          type: object
+          additionalProperties: true
+        status:
+          type: object
+          properties:
+            ready: { type: boolean }
+            active_deployment_id: { $ref: '#/components/schemas/ResourceId' }
+            conditions:
+              type: array
+              items: { type: object }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+        updated_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Project:
+      type: object
+      required: [id, name, workspace_id, resource_version]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: project }
+        resource_version: { $ref: '#/components/schemas/ResourceVersion' }
+        name: { type: string, minLength: 1, maxLength: 64 }
+        slug: { type: string, pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$' }
+        workspace_id: { $ref: '#/components/schemas/ResourceId' }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+          description: Required allocation labels include `owner`, `team`, `environment_tier`, `data_classification`.
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Workspace:
+      type: object
+      required: [id, name, resource_version]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: workspace }
+        resource_version: { $ref: '#/components/schemas/ResourceVersion' }
+        name: { type: string, minLength: 1, maxLength: 64 }
+        slug: { type: string, pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$' }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Environment:
+      type: object
+      required: [id, name, project_id, tier, resource_version]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: environment }
+        resource_version: { $ref: '#/components/schemas/ResourceVersion' }
+        project_id: { $ref: '#/components/schemas/ResourceId' }
+        name: { type: string, pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$' }
+        tier:
+          type: string
+          enum: [dev, staging, production, preview]
+        protection:
+          type: object
+          properties:
+            required_reviewers: { type: integer, minimum: 0 }
+            allowed_branches: { type: array, items: { type: string } }
+            wait_timer_seconds: { type: integer, minimum: 0 }
+            freeze: { type: boolean, default: false }
+            required_external_checks: { type: array, items: { type: string } }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Domain:
+      type: object
+      required: [id, hostname, hostname_type, status, service_id]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: domain }
+        resource_version: { $ref: '#/components/schemas/ResourceVersion' }
+        hostname: { type: string, format: hostname }
+        hostname_type:
+          type: string
+          enum: [generated, custom_subdomain, custom_apex, custom_wildcard]
+        service_id: { $ref: '#/components/schemas/ResourceId' }
+        environment_id: { $ref: '#/components/schemas/ResourceId' }
+        project_id: { $ref: '#/components/schemas/ResourceId' }
+        target_port: { type: integer, minimum: 1, maximum: 65535 }
+        protocol: { type: string, enum: [http, h2c, grpc] }
+        verification:
+          type: object
+          properties:
+            txt_record_name: { type: string }
+            txt_record_value: { type: string }
+            ownership_verified_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+            routing_verified_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+            last_failure_reason:
+              type: string
+              description: Sub-reason taxonomy = missing_txt | wrong_txt | wrong_routing_record | dns_not_propagated | caa_blocks | port80_blocked | ipv6_mismatch | le_rate_limit | advertised_addresses_drift.
+              nullable: true
+        tls:
+          type: object
+          properties:
+            status:
+              type: string
+              enum: [pending, issued, renewing, failed, revoked]
+            certificate_id: { $ref: '#/components/schemas/ResourceId' }
+            not_after: { $ref: '#/components/schemas/Timestamp', nullable: true }
+            challenge_type: { type: string, enum: [http-01, dns-01], nullable: true }
+        status:
+          type: string
+          enum: [pending_verification, active, lapsed, removed]
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    Variable:
+      type: object
+      required: [id, key, scope, kind]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind:
+          type: string
+          enum: [plain, secret, sealed, shared, reference, system]
+        scope:
+          type: object
+          required: [kind, id]
+          properties:
+            kind: { type: string, enum: [workspace, project, environment, service] }
+            id: { $ref: '#/components/schemas/ResourceId' }
+        key: { type: string, pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 128 }
+        value:
+          type: string
+          description: Only present for `kind == plain` or `kind == reference` resolvers. NEVER returned for `secret` or `sealed`.
+          nullable: true
+        reference:
+          type: object
+          description: Present when `kind == reference`.
+          properties:
+            target_kind: { type: string, enum: [variable, service_output] }
+            target_id: { $ref: '#/components/schemas/ResourceId' }
+        last_rotated_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+        length_bucket:
+          type: string
+          description: For `sealed` only. Approximate length class for UX (`small|medium|large`).
+          nullable: true
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    VolumeAttachment:
+      type: object
+      required: [id, volume_id, service_id, mount_path]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: volume_attachment }
+        volume_id: { $ref: '#/components/schemas/ResourceId' }
+        service_id: { $ref: '#/components/schemas/ResourceId' }
+        mount_path: { type: string }
+        readonly: { type: boolean, default: false }
+        consistency_level:
+          type: string
+          enum: [logical-consistent, physical-pitr, quiesced-filesystem, stopped-service, crash-consistent, unknown]
+        soft_delete_until: { $ref: '#/components/schemas/Timestamp', nullable: true }
+
+    Build:
+      type: object
+      required: [id, deployment_id, status, builder]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: build }
+        deployment_id: { $ref: '#/components/schemas/ResourceId' }
+        status: { type: string, enum: [queued, running, succeeded, failed, canceled] }
+        builder:
+          type: object
+          properties:
+            type: { type: string, enum: [dockerfile, railpack, nixpacks, image] }
+            version: { type: string }
+            digest: { type: string }
+        image_digest: { type: string, nullable: true }
+        sbom_digest: { type: string, nullable: true }
+        provenance_digest: { type: string, nullable: true }
+        cache_key: { type: string, nullable: true }
+        trusted: { type: boolean, description: '`false` indicates an untrusted-build classification.' }
+        log_url: { type: string, format: uri-reference }
+        started_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+        ended_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+
+    Host:
+      type: object
+      required: [id, status]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        kind: { type: string, const: host }
+        hostname: { type: string }
+        agent_version: { type: string }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        capacity:
+          type: object
+          properties:
+            cpu_millicores: { type: integer }
+            memory_bytes: { type: integer, format: int64 }
+            disk_bytes: { type: integer, format: int64 }
+        clock_offset_seconds: { type: number }
+        last_heartbeat_at: { $ref: '#/components/schemas/Timestamp' }
+        status:
+          type: string
+          enum: [registering, active, degraded, lost, draining, removed]
+
+    AuditEvent:
+      type: object
+      description: Hash-chained audit row. Export shape includes `prev_hash`, `row_hash`, `checkpoint_id`.
+      required: [id, action, actor, occurred_at, prev_hash, row_hash]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        action: { type: string }
+        actor:
+          type: object
+          properties:
+            id: { $ref: '#/components/schemas/ResourceId' }
+            kind: { type: string, enum: [user, service_account, agent, system, mcp] }
+            token_prefix: { type: string }
+            ip: { type: string }
+            user_agent: { type: string }
+        target:
+          type: object
+          properties:
+            kind: { type: string }
+            id: { $ref: '#/components/schemas/ResourceId' }
+        before: { type: object, additionalProperties: true, nullable: true }
+        after: { type: object, additionalProperties: true, nullable: true }
+        request_id: { type: string }
+        prev_hash: { type: string }
+        row_hash: { type: string }
+        checkpoint_id: { type: string, nullable: true }
+        occurred_at: { $ref: '#/components/schemas/Timestamp' }
+
+    WebhookDelivery:
+      type: object
+      required: [id, endpoint_id, event_type, attempt, status]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        delivery_id: { type: string, description: Stable per-delivery dedupe key surfaced to subscribers. }
+        endpoint_id: { $ref: '#/components/schemas/ResourceId' }
+        event_id: { $ref: '#/components/schemas/ResourceId' }
+        event_type: { type: string, examples: ["dev.midnight.deployment.failed"] }
+        attempt: { type: integer, minimum: 1 }
+        status:
+          type: string
+          enum: [pending, succeeded, failed, dead_lettered]
+        request_signature_kid: { type: string }
+        response_status: { type: integer, nullable: true }
+        latency_ms: { type: integer, nullable: true }
+        next_retry_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    BootstrapToken:
+      type: object
+      required: [token]
+      properties:
+        token:
+          type: string
+          description: One-shot bootstrap token from `/var/lib/midnight/bootstrap-token`.
+        password:
+          type: string
+          format: password
+          minLength: 12
+          description: Argon2id-hashed server-side; never stored plaintext.
+        totp_secret_confirmation:
+          type: string
+          description: TOTP RFC 6238 enrollment confirmation code.
+
+    ApiToken:
+      type: object
+      required: [id, class, prefix, created_at]
+      properties:
+        id: { $ref: '#/components/schemas/ResourceId' }
+        class: { type: string, enum: [admin, user, sa, agent, mcp] }
+        name: { type: string }
+        prefix: { type: string, minLength: 6, maxLength: 6 }
+        plaintext:
+          type: string
+          description: Returned ONCE at creation. Never retrievable afterwards.
+          nullable: true
+        scopes:
+          type: array
+          items: { type: string }
+        last_used_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+        expires_at: { $ref: '#/components/schemas/Timestamp', nullable: true }
+        created_at: { $ref: '#/components/schemas/Timestamp' }
+
+    CompatInfo:
+      type: object
+      required: [server_version, api_version, min_agent_version, max_agent_version]
+      properties:
+        server_version: { type: string }
+        api_version: { type: string, examples: ["v1alpha"] }
+        min_agent_version: { type: string }
+        max_agent_version: { type: string }
+        min_worker_version: { type: string }
+        max_worker_version: { type: string }
+        min_buildkit_version: { type: string }
+        components:
+          type: object
+          additionalProperties: { type: object }
+
+    PageMeta:
+      type: object
+      required: [next_cursor]
+      properties:
+        next_cursor:
+          type: string
+          nullable: true
+          description: '`null` denotes end of iteration. No `total_count` is ever provided.'
+
+    DeploymentList:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Deployment' } }
+        page: { $ref: '#/components/schemas/PageMeta' }
+        request_id: { type: string }
+
+    ProjectList:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Project' } }
+        page: { $ref: '#/components/schemas/PageMeta' }
+        request_id: { type: string }
+
+    WorkspaceList:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/Workspace' } }
+        page: { $ref: '#/components/schemas/PageMeta' }
+        request_id: { type: string }
+
+    AuditEventList:
+      type: object
+      required: [data, page]
+      properties:
+        data: { type: array, items: { $ref: '#/components/schemas/AuditEvent' } }
+        page: { $ref: '#/components/schemas/PageMeta' }
+        request_id: { type: string }
+
+  examples:
+    DeploymentActive:
+      summary: An ACTIVE deployment after promotion.
+      value:
+        id: "dep_01HZX9C6F7G8H9JKMNPQRSTVWX"
+        kind: deployment
+        resource_version: "rv_01HZXAQR6PCFM5G2BCDEFGHJKL"
+        service_id: "svc_01HZX5N0AAEC9P3WQYRSTVWXYZ"
+        environment_id: "env_01HZX5N0AAEC9P3WQ0123456AA"
+        project_id: "prj_01HZX5MZZZZZZZZZZ0123456BB"
+        sequence: 142
+        state: ACTIVE
+        snapshot:
+          source_sha: "9f1c4b2e3d77a8e0bcf2..."
+          builder: { type: dockerfile, version: "1.6.0", digest: "sha256:..." }
+          image_digest: "sha256:fa5e7b..."
+          base_image_digests: ["sha256:..."]
+          resolved_variables_ref: "secref://content-addressed/abcd..."
+        instances: { ready: 1, desired: 1 }
+        timeline_url: "/api/v1alpha/deployments/dep_01HZX9C6F7G8H9JKMNPQRSTVWX/timeline"
+        logs_url: "/api/v1alpha/deployments/dep_01HZX9C6F7G8H9JKMNPQRSTVWX/logs"
+        created_at: "2026-04-25T12:00:00Z"
+        promoted_at: "2026-04-25T12:01:34Z"
+        request_id: "req_01HZXACCEPTED12345678ABCDE"
+
+    OperationPending:
+      summary: A 202-accepted async operation.
+      value:
+        id: "op_01HZXOPSAVERAGE0PERATION001"
+        kind: "service.deploy"
+        state: PENDING
+        target: { kind: service, id: "svc_01HZX5N0AAEC9P3WQYRSTVWXYZ" }
+        actor:
+          id: "usr_01HZXUSERID000000000000ABC"
+          kind: user
+          token_prefix: "abc123"
+        idempotency_key: "5b8b8e9c-7c4b-4d3c-a3a2-1234567890ab"
+        request_id: "req_01HZXACCEPTED12345678ABCDE"
+        created_at: "2026-04-25T12:00:00Z"
+        updated_at: "2026-04-25T12:00:00Z"
+        expires_at: "2026-04-26T12:00:00Z"
+
+    ErrorIdempotencyKeyReused:
+      summary: 409 IDEMPOTENCY_KEY_REUSED.
+      value:
+        code: IDEMPOTENCY_KEY_REUSED
+        message: "Idempotency key already used with a different request body."
+        request_id: "req_01HZXEYE57BADCALL000000ABC"
+        docs_url: "https://midnight.dev/docs/error-codes#idempotency_key_reused"
+        details:
+          first_request_body_hash: "sha256:c7c..."
+          replay_request_body_hash: "sha256:b1f..."
+
+    ErrorResourceVersionMismatch:
+      summary: 412 RESOURCE_VERSION_MISMATCH.
+      value:
+        code: RESOURCE_VERSION_MISMATCH
+        message: "Resource version supplied in If-Match no longer matches."
+        request_id: "req_01HZXEYE412MISMATCH000ABCD"
+        docs_url: "https://midnight.dev/docs/error-codes#resource_version_mismatch"
+        details:
+          expected: "rv_01HZXOLD"
+          actual: "rv_01HZXNEW"
+
+  responses:
+    Error400:
+      description: Bad request (validation, malformed input, INVALID_CURSOR, IDEMPOTENCY_KEY_REQUIRED).
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error401:
+      description: Unauthenticated.
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+        WWW-Authenticate:
+          schema: { type: string }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error403:
+      description: Forbidden (deny-by-default authorization).
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error404:
+      description: Not found.
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error409:
+      description: Conflict (IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_REQUEST_IN_PROGRESS, OPERATION_SUPERSEDED, CANCEL_NOT_SAFE, OWNERSHIP_CONFLICT).
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            idempotency_key_reused: { $ref: '#/components/examples/ErrorIdempotencyKeyReused' }
+    Error412:
+      description: Optimistic concurrency violation.
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+          examples:
+            resource_version_mismatch: { $ref: '#/components/examples/ErrorResourceVersionMismatch' }
+    Error422:
+      description: Unprocessable entity (semantic validation failure).
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error429:
+      description: Rate limited (RATE_LIMITED).
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+        Retry-After: { $ref: '#/components/headers/RetryAfter' }
+        RateLimit-Limit: { $ref: '#/components/headers/RateLimitLimit' }
+        RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+        RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Error500:
+      description: Internal error (PLATFORM_DEGRADED if scoped).
+      headers:
+        X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+paths:
+  /auth/bootstrap-token/use:
+    post:
+      operationId: useBootstrapToken
+      tags: [bootstrap]
+      summary: Consume the one-shot bootstrap token; create the first admin user with mandatory password+TOTP.
+      security: []
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/BootstrapToken' }
+      responses:
+        "201":
+          description: Admin user created; bootstrap path auto-disables.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiToken' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "404":
+          description: Bootstrap path already disabled (`BOOTSTRAP_DISABLED`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "429": { $ref: '#/components/responses/Error429' }
+        "500": { $ref: '#/components/responses/Error500' }
+
+  /compat:
+    get:
+      operationId: getCompat
+      tags: [compat]
+      summary: Return server/API version and accepted agent/worker version ranges.
+      x-rate-limit-class: agent
+      x-idempotent: true
+      security: []
+      responses:
+        "200":
+          description: Compatibility info.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CompatInfo' }
+
+  /workspaces:
+    get:
+      operationId: listWorkspaces
+      tags: [workspaces]
+      summary: List workspaces visible to the actor.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            RateLimit-Limit: { $ref: '#/components/headers/RateLimitLimit' }
+            RateLimit-Remaining: { $ref: '#/components/headers/RateLimitRemaining' }
+            RateLimit-Reset: { $ref: '#/components/headers/RateLimitReset' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/WorkspaceList' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "429": { $ref: '#/components/responses/Error429' }
+    post:
+      operationId: createWorkspace
+      tags: [workspaces]
+      summary: Create a new workspace.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties:
+                name: { type: string, minLength: 1, maxLength: 64 }
+                slug: { type: string, pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$' }
+      responses:
+        "201":
+          description: Workspace created.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workspace' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "422": { $ref: '#/components/responses/Error422' }
+        "429": { $ref: '#/components/responses/Error429' }
+
+  /workspaces/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: getWorkspace
+      tags: [workspaces]
+      summary: Get a workspace by ID.
+      x-rate-limit-class: user
+      x-idempotent: true
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Workspace' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /projects:
+    get:
+      operationId: listProjects
+      tags: [projects]
+      summary: List projects in scope.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: workspace_id
+          in: query
+          schema: { $ref: '#/components/schemas/ResourceId' }
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ProjectList' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+    post:
+      operationId: createProject
+      tags: [projects]
+      summary: Create a project in a workspace.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, workspace_id]
+              properties:
+                workspace_id: { $ref: '#/components/schemas/ResourceId' }
+                name: { type: string, minLength: 1, maxLength: 64 }
+                slug: { type: string, pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$' }
+                labels:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "422": { $ref: '#/components/responses/Error422' }
+
+  /projects/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: getProject
+      tags: [projects]
+      summary: Get a project by ID.
+      x-rate-limit-class: user
+      x-idempotent: true
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Project' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /projects/{id}/environments:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      operationId: createEnvironment
+      tags: [environments]
+      summary: Create an environment in a project.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, tier]
+              properties:
+                name: { type: string, pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$' }
+                tier: { type: string, enum: [dev, staging, production, preview] }
+                protection:
+                  type: object
+                  additionalProperties: true
+      responses:
+        "201":
+          description: Created.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Environment' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "422": { $ref: '#/components/responses/Error422' }
+
+  /environments/{id}/services:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      operationId: createService
+      tags: [services]
+      summary: Create a service in an environment.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, type]
+              properties:
+                name: { type: string, pattern: '^[a-z]([-a-z0-9]{0,61}[a-z0-9])?$' }
+                type: { type: string, enum: [web, worker, cron, db_template] }
+                spec: { type: object, additionalProperties: true }
+                labels:
+                  type: object
+                  additionalProperties: { type: string }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "422": { $ref: '#/components/responses/Error422' }
+
+  /services/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: getService
+      tags: [services]
+      summary: Get a service by ID.
+      x-rate-limit-class: user
+      x-idempotent: true
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            ETag:
+              description: '`resource_version` for optimistic concurrency.'
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Service' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /services/{id}/deploy:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      operationId: deployService
+      tags: [services, deployments]
+      summary: Trigger a deploy for a service.
+      description: |
+        Async semantic action. Returns `202 Accepted` with `Location: /api/v1alpha/operations/{op_id}`
+        and the full Operation in the body. Default `runLatest` semantics apply for push deploys.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                source:
+                  type: object
+                  description: One of (image_digest | git_ref+sha | upload_id).
+                  additionalProperties: true
+                vars_overlay:
+                  type: object
+                  description: Optional non-secret config-as-code overlay for THIS deploy snapshot only.
+                  additionalProperties: true
+      responses:
+        "202":
+          description: Accepted. Body is the Operation; Location points at it.
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+              examples:
+                operation_pending: { $ref: '#/components/examples/OperationPending' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "412": { $ref: '#/components/responses/Error412' }
+        "422": { $ref: '#/components/responses/Error422' }
+        "429": { $ref: '#/components/responses/Error429' }
+        "500": { $ref: '#/components/responses/Error500' }
+
+  /deployments/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: getDeployment
+      tags: [deployments]
+      summary: Get a deployment by ID.
+      x-rate-limit-class: user
+      x-idempotent: true
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Deployment' }
+              examples:
+                deployment_active: { $ref: '#/components/examples/DeploymentActive' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /deployments/{id}/rollback:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      operationId: rollbackDeployment
+      tags: [deployments]
+      summary: Roll back to a prior deployment by replaying the recorded snapshot's image digest.
+      description: |
+        Panel-locked: rollback always pulls the previously built image digest; rollback never rebuilds.
+        If the digest is unretrievable, rollback fails with `ROLLBACK_IMAGE_UNAVAILABLE`.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                to:
+                  type: string
+                  description: Optional target deployment id (`dep_*`). Default = `--previous`.
+      responses:
+        "202":
+          description: Accepted; rollback Operation returned.
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "412": { $ref: '#/components/responses/Error412' }
+        "422": { $ref: '#/components/responses/Error422' }
+        "429": { $ref: '#/components/responses/Error429' }
+
+  /deployments/{id}/cancel:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    post:
+      operationId: cancelDeployment
+      tags: [deployments]
+      summary: Request cancellation of a deployment at a named safe point.
+      description: |
+        Cancellation is cooperative at named safe points only. Between route-add (step 6) and
+        drain-completion (step 9), cancellation is rejected with `CANCEL_NOT_SAFE`; only rollback
+        is permitted in that window.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        "202":
+          description: Cancellation accepted.
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+
+  /deployments/{id}/logs:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: streamDeploymentLogs
+      tags: [deployments]
+      summary: Server-Sent Events log stream for a deployment.
+      description: |
+        SSE default. Each event is a redacted NDJSON line `{ts, stream, level, msg, attrs}`.
+        Reconnect with `Last-Event-ID`. WebSocket alternate at `/v1alpha/ws` for log/exec
+        multiplexing only (documented; not preferred).
+      x-rate-limit-class: user
+      x-idempotent: true
+      x-event-stream: true
+      parameters:
+        - $ref: '#/components/parameters/LastEventId'
+        - name: since
+          in: query
+          schema: { type: string, examples: ["1h"] }
+        - name: tail
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10000 }
+        - name: follow
+          in: query
+          schema: { type: boolean, default: true }
+      responses:
+        "200":
+          description: text/event-stream of log events.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Cache-Control:
+              schema: { type: string, const: "no-cache" }
+            Content-Type:
+              schema: { type: string, const: "text/event-stream" }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+                description: "SSE stream; `event: log` lines with NDJSON `data:` payloads."
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /deployments/{id}/timeline:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: getDeploymentTimeline
+      tags: [deployments]
+      summary: Structured deployment timeline (resolve, build, schedule, healthcheck, route, TLS, drain).
+      x-rate-limit-class: user
+      x-idempotent: true
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [deployment_id, events]
+                properties:
+                  deployment_id: { $ref: '#/components/schemas/ResourceId' }
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        phase:
+                          type: string
+                          enum:
+                            - CREATED
+                            - QUEUED
+                            - BUILDING
+                            - BUILD_FAILED
+                            - IMAGE_READY
+                            - SCHEDULING
+                            - STARTING
+                            - READINESS_CHECKING
+                            - READY
+                            - PROMOTING
+                            - ACTIVE
+                            - DRAINING_PREVIOUS
+                            - COMPLETED
+                            - FAILED
+                            - CANCELING
+                            - CANCELED
+                            - REMOVING
+                            - REMOVED
+                        at: { $ref: '#/components/schemas/Timestamp' }
+                        reason_code: { type: string, nullable: true }
+                        message: { type: string }
+                        attrs: { type: object, additionalProperties: true }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /domains/verify:
+    post:
+      operationId: verifyDomain
+      tags: [domains]
+      summary: Verify a custom domain binding (TXT ownership and routing record).
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [domain_id]
+              properties:
+                domain_id: { $ref: '#/components/schemas/ResourceId' }
+      responses:
+        "202":
+          description: Accepted; verification Operation returned.
+          headers:
+            Location: { $ref: '#/components/headers/Location' }
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "422": { $ref: '#/components/responses/Error422' }
+        "429": { $ref: '#/components/responses/Error429' }
+
+  /domains/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: getDomain
+      tags: [domains]
+      summary: Get a domain binding.
+      x-rate-limit-class: user
+      x-idempotent: true
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Domain' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /variables:
+    post:
+      operationId: createVariable
+      tags: [variables]
+      summary: Create a variable in scope.
+      description: |
+        Sealed variables: no API path returns plaintext after create; rotation requires a new
+        value, not view-then-edit. Audit/snapshot exports elide plaintext.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [scope, key, kind]
+              properties:
+                scope:
+                  type: object
+                  required: [kind, id]
+                  properties:
+                    kind: { type: string, enum: [workspace, project, environment, service] }
+                    id: { $ref: '#/components/schemas/ResourceId' }
+                key: { type: string, pattern: '^[A-Z][A-Z0-9_]*$', maxLength: 128 }
+                kind: { type: string, enum: [plain, secret, sealed, shared, reference] }
+                value: { type: string }
+                reference:
+                  type: object
+                  properties:
+                    target_kind: { type: string, enum: [variable, service_output] }
+                    target_id: { $ref: '#/components/schemas/ResourceId' }
+      responses:
+        "201":
+          description: Created.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Variable' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "422": { $ref: '#/components/responses/Error422' }
+
+  /variables/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    patch:
+      operationId: updateVariable
+      tags: [variables]
+      summary: Update a variable. Sealed variables refuse view-then-edit.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+        - $ref: '#/components/parameters/IfMatch'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                value: { type: string }
+                reference:
+                  type: object
+                  properties:
+                    target_kind: { type: string, enum: [variable, service_output] }
+                    target_id: { $ref: '#/components/schemas/ResourceId' }
+      responses:
+        "200":
+          description: Updated.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            ETag:
+              schema: { type: string }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Variable' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "409": { $ref: '#/components/responses/Error409' }
+        "412": { $ref: '#/components/responses/Error412' }
+        "422": { $ref: '#/components/responses/Error422' }
+
+  /operations/{id}:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: getOperation
+      tags: [operations]
+      summary: Poll an Operation. Use SSE on `/events` for streaming.
+      x-rate-limit-class: user
+      x-idempotent: true
+      responses:
+        "200":
+          description: OK. Includes `Retry-After` (integer seconds) and adaptive backoff hint.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Retry-After: { $ref: '#/components/headers/RetryAfter' }
+            X-Adaptive-Backoff-Hint-Seconds: { $ref: '#/components/headers/AdaptiveBackoffHint' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Operation' }
+              examples:
+                operation_pending: { $ref: '#/components/examples/OperationPending' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /operations/{id}/events:
+    parameters:
+      - $ref: '#/components/parameters/PathId'
+    get:
+      operationId: streamOperationEvents
+      tags: [operations]
+      summary: SSE stream of Operation lifecycle events.
+      description: |
+        Default streaming surface. Reconnect with `Last-Event-ID`; the server replays events
+        strictly after that id and continues live. `event: state` carries Operation state
+        transitions; `event: progress` carries structured progress; `event: done` is the
+        terminal frame.
+      x-rate-limit-class: user
+      x-idempotent: true
+      x-event-stream: true
+      parameters:
+        - $ref: '#/components/parameters/LastEventId'
+      responses:
+        "200":
+          description: text/event-stream of Operation events.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Cache-Control:
+              schema: { type: string, const: "no-cache" }
+            Content-Type:
+              schema: { type: string, const: "text/event-stream" }
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "404": { $ref: '#/components/responses/Error404' }
+
+  /audit-logs:
+    get:
+      operationId: listAuditEvents
+      tags: [audit]
+      summary: List audit events (cursor-paginated, hash-chained).
+      description: |
+        Returned rows include `prev_hash`, `row_hash`, `checkpoint_id`. Use `midnight audit verify`
+        to walk the chain and validate against the daily signed checkpoint.
+      x-rate-limit-class: user
+      x-idempotent: true
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+        - name: since
+          in: query
+          schema: { $ref: '#/components/schemas/Timestamp' }
+        - name: actor_id
+          in: query
+          schema: { $ref: '#/components/schemas/ResourceId' }
+        - name: action
+          in: query
+          schema: { type: string }
+      responses:
+        "200":
+          description: OK.
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/AuditEventList' }
+        "400": { $ref: '#/components/responses/Error400' }
+        "401": { $ref: '#/components/responses/Error401' }
+        "403": { $ref: '#/components/responses/Error403' }
+        "429": { $ref: '#/components/responses/Error429' }
+
+  /webhooks/inbound/{provider}:
+    parameters:
+      - name: provider
+        in: path
+        required: true
+        description: Provider key (e.g. `github`, `gitlab-generic`, `midnight-incoming`).
+        schema:
+          type: string
+          enum: [github, gitlab-generic, bitbucket, midnight-incoming]
+    post:
+      operationId: ingestInboundWebhook
+      tags: [webhooks]
+      summary: Ingest a signed inbound webhook.
+      description: |
+        HMAC-verified inbound. Provider-specific signing for GitHub (`X-Hub-Signature-256`) is
+        accepted alongside the Midnight envelope (`Midnight-Signature: t=<unix>,v1=<hex>,kid=<key_id>`).
+        Replay window 300s; two active keys per endpoint with 30-day rotation. Dedupe by
+        `(delivery_id, event_hash)`. Async handoff: verify -> dedupe -> enqueue -> 2xx, all under
+        provider deadline.
+      x-rate-limit-class: webhook-receiver
+      x-idempotent: true
+      security: []
+      parameters:
+        - name: Midnight-Signature
+          in: header
+          required: false
+          schema: { type: string }
+        - name: X-Hub-Signature-256
+          in: header
+          required: false
+          schema: { type: string }
+        - name: X-GitHub-Delivery
+          in: header
+          required: false
+          schema: { type: string }
+        - name: X-Midnight-Delivery
+          in: header
+          required: false
+          schema: { type: string }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        "200":
+          description: "Accepted (idempotent replay returns same response with `Idempotent-Replayed: true`)."
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+            Idempotent-Replayed: { $ref: '#/components/headers/IdempotentReplayed' }
+        "400":
+          description: Verification failed (`WEBHOOK_SIGNATURE_INVALID`, `WEBHOOK_REPLAY_REJECTED`).
+          headers:
+            X-Request-Id: { $ref: '#/components/headers/XRequestId' }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "404": { $ref: '#/components/responses/Error404' }
+        "410":
+          description: Endpoint disabled after repeated failure (`WEBHOOK_ENDPOINT_DISABLED`).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        "429": { $ref: '#/components/responses/Error429' }

@@ -1,0 +1,34 @@
+http:
+  routers:
+    acme-http01-challenge:
+      rule: 'PathPrefix(`/.well-known/acme-challenge/`)'
+      service: 'acme-http@internal'
+      entryPoints:
+        - 'web'
+      priority: 2147483647
+    api:
+      rule: 'Host(`api.example.test`) && PathPrefix(`/`)'
+      service: 'api-service'
+      entryPoints:
+        - 'websecure'
+      tls: {}
+      middlewares:
+        - 'http-to-https'
+        - 'gzip'
+  services:
+    api-service:
+      loadBalancer:
+        servers:
+          - url: 'http://10.0.0.2:8080'
+  middlewares:
+    gzip:
+      compress:
+        minResponseBodyBytes: 1024
+        excludedContentTypes:
+          - 'application/octet-stream'
+          - 'image/png'
+    http-to-https:
+      redirectScheme:
+        scheme: 'https'
+        permanent: true
+        port: '443'

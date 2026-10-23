@@ -1,0 +1,6 @@
+# This directory is the documented publication root for Midnight-generated
+# Traefik dynamic config files. The control plane writes one file per route
+# group via os.Rename atomic swaps; Traefik watches this directory.
+#
+# DO NOT place hand-edited config here. The control plane refuses to publish
+# to a directory it does not own.

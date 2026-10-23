@@ -1,0 +1,6 @@
+# Generated-code configuration for the public v1alpha HTTP client.
+# The generator version is pinned in scripts/generate-midnightctl.sh.
+package: midnightctl
+generate:
+  client: true
+output: pkg/midnightctl/client.gen.go

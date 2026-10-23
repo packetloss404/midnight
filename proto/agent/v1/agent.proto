@@ -1,0 +1,9 @@
+syntax = "proto3";
+
+package midnight.agent.v1;
+
+option go_package = "github.com/midnight/midnight/proto/agent/v1;agentv1";
+
+message AgentHello {
+  string agent_version = 1;
+}

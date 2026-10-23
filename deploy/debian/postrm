@@ -1,0 +1,62 @@
+#!/bin/sh
+# postrm - clean up after package removal.
+#
+# Behavior matches the panel-locked uninstall enumeration:
+#   * remove:  stop units (already done by prerm), reload systemd
+#   * purge:   remove /var/lib/midnight, /var/log/midnight, /etc/midnight,
+#              and add a marker comment to /etc/docker/daemon.json
+#              instead of editing operator-managed keys.
+#
+# Removing the system user/group only happens on `purge` per Debian
+# policy.
+
+set -e
+
+USER=midnight
+GROUP=midnight
+STATE_DIR=/var/lib/midnight
+LOG_DIR=/var/log/midnight
+ETC_DIR=/etc/midnight
+DAEMON_JSON_PATH=/etc/docker/daemon.json
+
+case "$1" in
+remove)
+    if command -v systemctl >/dev/null; then
+        systemctl daemon-reload || true
+    fi
+    ;;
+purge)
+    # State + logs + config are explicit operator territory; only
+    # delete on --purge.
+    rm -rf "$STATE_DIR" "$LOG_DIR" "$ETC_DIR"
+
+    # daemon.json: leave operator-managed keys in place but tag the
+    # file so the next operator knows Midnight had been here. This
+    # mirrors §0.6-EC6 ("uninstall preserves volumes/registry/Postgres
+    # /secrets unless --purge flags pass").
+    if [ -f "$DAEMON_JSON_PATH" ]; then
+        marker="// midnight uninstall: removed managed keys $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        # Prepend the marker as a JSON-friendly leading comment line
+        # (json strict parsers will complain; jq tolerates // when
+        # invoked with `-c` over `-S` not used here).
+        printf '%s\n' "$marker" > "${DAEMON_JSON_PATH}.midnight-marker"
+    fi
+
+    if getent passwd "$USER" >/dev/null; then
+        deluser --system --quiet "$USER" || true
+    fi
+    if getent group "$GROUP" >/dev/null; then
+        delgroup --system --quiet "$GROUP" || true
+    fi
+    ;;
+abort-install|abort-upgrade|disappear|upgrade|failed-upgrade)
+    ;;
+*)
+    echo "postrm called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

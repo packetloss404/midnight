@@ -1,0 +1,124 @@
+# OS/editor noise
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Local environment and secrets
+.env
+.env.*
+!.env.example
+.envrc
+.direnv/
+*.env
+*.env.*
+!*.env.example
+# This is a checked-in, blank Debian package template.
+!/deploy/debian/midnight.env
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.priv
+*.private
+*.gpg
+*.pgp
+/secrets/
+.aws/
+.ssh/
+.kube/
+.gnupg/
+.docker/
+.npmrc
+.pypirc
+.netrc
+.vault-token
+id_rsa
+id_ed25519
+id_ecdsa
+id_dsa
+credentials.json
+*service-account*.json
+
+# Logs and temporary files
+*.log
+/logs/
+/tmp/
+/temp/
+.cache/
+tools/phase0-gate/tmp/
+
+# Build artifacts
+/bin/
+/dist/
+/artifacts/
+/build/
+/debian/
+/out/
+/coverage/
+coverage.out
+$cover
+*.coverprofile
+*.cov
+*.tsbuildinfo
+
+# Go
+vendor/
+*.test
+# Compiled command binaries (the canonical artifacts live in /bin or release tarballs).
+/midnight
+/midnight.exe
+/midnight-*
+/midnight-*.exe
+!midnight-platform-plan.md
+
+# Node/web
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+
+# Python tooling occasionally used by docs/tests
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Terraform/OpenTofu local state
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+*.tfplan
+
+# Local runtime data
+.midnight/
+data/
+*.sqlite
+*.sqlite3
+*.db
+*.db-*
+*.dump
+*.bak
+
+# Claude Code harness state (agent worktrees, transcripts, scratch)
+.claude/
+.codex/
+.agents/
+
+# Local AI/browser review captures
+.codex-*.png
+
+# Sibling git worktrees used for parallel lane development
+.worktrees/

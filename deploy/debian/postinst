@@ -1,0 +1,458 @@
+#!/bin/sh
+# postinst - configure Midnight on a fresh install or upgrade.
+#
+# Phase 0 / Phase 1 alpha:
+#   * create the midnight system user/group
+#   * create /var/lib/midnight, /var/log/midnight, /run/midnight
+#   * write /etc/midnight/midnight.env if absent (does not overwrite)
+#   * generate /etc/midnight/cursor.key if absent
+#   * generate /etc/midnight/automation-token.key if absent
+#   * generate /etc/midnight/invitation.key if absent
+#   * generate /etc/midnight/variable-intent.key if absent
+#   * generate /etc/midnight/kek (32 raw bytes, mode 0400) if absent
+#   * generate MIDNIGHT_API_BEARER_TOKEN in midnight.env if absent
+#   * generate a per-agent credential and server-side scoped keyring if absent
+#   * create the Traefik dynamic route publication directory
+#   * install daemon.json baseline only when /etc/docker/daemon.json
+#     is absent; on conflict the postinst REFUSES (matches 0.1-EC4)
+#   * run schema migrations through `midnight admin migrate`
+#   * run the scoped live package-readiness doctor profile; warnings are
+#     recorded without failing, while fatal/configuration errors stop postinst
+#
+# Fresh installs deliberately do NOT enable or start systemd units. During an
+# upgrade, only units captured as active by prerm are restarted, and only after
+# migrations and doctor checks succeed.
+
+set -e
+
+USER=midnight
+GROUP=midnight
+STATE_DIR=/var/lib/midnight
+LOG_DIR=/var/log/midnight
+RUN_DIR=/run/midnight
+ETC_DIR=/etc/midnight
+DAEMON_JSON_PATH=/etc/docker/daemon.json
+DAEMON_JSON_BASELINE=/usr/share/midnight/daemon-json/docker-daemon-baseline.json
+CURSOR_KEY_PATH="$ETC_DIR/cursor.key"
+AUTOMATION_TOKEN_KEY_PATH="$ETC_DIR/automation-token.key"
+INVITATION_KEY_PATH="$ETC_DIR/invitation.key"
+VARIABLE_INTENT_KEY_PATH="$ETC_DIR/variable-intent.key"
+KEK_PATH="$ETC_DIR/kek"
+REGISTRY_CONFIG_PATH="$ETC_DIR/registry.yml"
+AGENT_CREDENTIALS_PATH="$ETC_DIR/agent-credentials.json"
+AGENT_CREDENTIAL_PATH="$ETC_DIR/agent.credential"
+TRAEFIK_DYNAMIC_DIR="$ETC_DIR/traefik/dynamic"
+REGISTRY_STATE_DIR="$STATE_DIR/registry"
+UPGRADE_STATE_DIR=/run/midnight-package-upgrade
+UPGRADE_ACTIVE_UNITS="$UPGRADE_STATE_DIR/active-units"
+MIDNIGHT_UNIT_FILES="midnight-server.service midnight-worker.service midnight-agent.service midnight-buildkit-worker.service midnight-buildkit.service midnight-registry.service midnight-github-status-worker.service"
+
+stop_midnight_units() {
+    systemctl stop \
+        midnight-server.service \
+        midnight-worker.service \
+        midnight-agent.service \
+        midnight-buildkit-worker.service \
+        midnight-buildkit.service \
+        midnight-registry.service \
+        midnight-github-status-worker.service
+}
+
+validate_upgrade_snapshot() {
+    [ -f "$UPGRADE_ACTIVE_UNITS" ] && [ ! -L "$UPGRADE_ACTIVE_UNITS" ] || {
+        echo "midnight: refusing unsafe package-upgrade state file $UPGRADE_ACTIVE_UNITS" >&2
+        return 1
+    }
+    active_owner="$(stat -c %u -- "$UPGRADE_ACTIVE_UNITS")" || return 1
+    active_mode="$(stat -c %a -- "$UPGRADE_ACTIVE_UNITS")" || return 1
+    if [ "$active_owner" != 0 ] || [ "$active_mode" != 600 ]; then
+        echo "midnight: refusing package-upgrade state with unsafe ownership or mode" >&2
+        return 1
+    fi
+    while IFS= read -r saved_unit; do
+        case " $MIDNIGHT_UNIT_FILES " in
+            *" $saved_unit "*) ;;
+            *)
+                echo "midnight: package-upgrade state contains an unknown unit" >&2
+                return 1
+                ;;
+        esac
+    done <"$UPGRADE_ACTIVE_UNITS"
+}
+
+quiesce_upgrade_units() {
+    if [ ! -e "$UPGRADE_ACTIVE_UNITS" ]; then
+        return 0
+    fi
+    # Validate before stopping services or running a migration. Retained state
+    # is data from an earlier privileged transaction, never caller input.
+    validate_upgrade_snapshot
+    if command -v systemctl >/dev/null; then
+        # This is deliberately one systemd transaction. The alpha-2 bridge
+        # captures the active set before alpha-2's installed prerm stops all
+        # units; this new postinst quiesce is therefore an idempotent safety
+        # step before migration.
+        stop_midnight_units
+    fi
+}
+
+reload_systemd_units() {
+    if ! command -v systemctl >/dev/null; then
+        return 0
+    fi
+    if ! systemctl daemon-reload; then
+        echo "midnight: systemd daemon-reload failed; services remain stopped and upgrade state is retained" >&2
+        return 1
+    fi
+}
+
+restart_previously_active_units() {
+    if [ ! -e "$UPGRADE_ACTIVE_UNITS" ]; then
+        return 0
+    fi
+    validate_upgrade_snapshot
+
+    set --
+    for unit in $MIDNIGHT_UNIT_FILES; do
+        if grep -Fqx -- "$unit" "$UPGRADE_ACTIVE_UNITS"; then
+            set -- "$@" "$unit"
+        fi
+    done
+    if [ "$#" -gt 0 ]; then
+        if ! command -v systemctl >/dev/null || ! systemctl start "$@"; then
+            echo "midnight: could not restart all previously active services; retained $UPGRADE_ACTIVE_UNITS for retry" >&2
+            return 1
+        fi
+    fi
+    rm -f "$UPGRADE_ACTIVE_UNITS"
+    rmdir "$UPGRADE_STATE_DIR" 2>/dev/null || true
+}
+
+run_postinstall_doctor() {
+    if [ ! -x /usr/bin/midnight-doctor ]; then
+        return 0
+    fi
+    doctor_exit=0
+    /usr/bin/midnight-doctor \
+        --json \
+        --install-readiness \
+        --live \
+        >/var/lib/midnight/doctor-postinst.json || doctor_exit=$?
+    case "$doctor_exit" in
+        0)
+            return 0
+            ;;
+        1)
+            echo "midnight: post-install doctor reported warnings; package configuration continues." >&2
+            echo "midnight: review /var/lib/midnight/doctor-postinst.json before enabling services." >&2
+            return 0
+            ;;
+        *)
+            echo "midnight: post-install doctor returned a fatal or configuration error." >&2
+            echo "midnight: see /var/lib/midnight/doctor-postinst.json and run \`midnight-doctor --install-readiness --live\` to triage." >&2
+            return "$doctor_exit"
+            ;;
+    esac
+}
+
+case "$1" in
+configure)
+    if [ -n "${2:-}" ]; then
+        quiesce_upgrade_units
+    fi
+    if ! getent group "$GROUP" >/dev/null; then
+        addgroup --system "$GROUP"
+    fi
+    if ! getent passwd "$USER" >/dev/null; then
+        adduser --system --home "$STATE_DIR" --shell /usr/sbin/nologin --ingroup "$GROUP" --gecos "Midnight platform" "$USER"
+    fi
+    install -d -m 0750 -o "$USER" -g "$GROUP" "$STATE_DIR"
+    install -d -m 0750 -o "$USER" -g "$GROUP" "$STATE_DIR/uploads"
+    # The bundled registry runs as midnight and uses this path as its
+    # filesystem root. Create it during package configuration so the first
+    # image push does not fail on a fresh install with EACCES.
+    install -d -m 0750 -o "$USER" -g "$GROUP" "$REGISTRY_STATE_DIR"
+    # The BuildKit daemon owns $STATE_DIR/buildkit as root, but the build
+    # worker runs as $USER and writes its buildctl cache underneath it.
+    # Without this the first source build fails with
+    # "mkdir /var/lib/midnight/buildkit/cache: permission denied".
+    install -d -m 0755 -o root -g root "$STATE_DIR/buildkit"
+    install -d -m 0750 -o "$USER" -g "$GROUP" "$STATE_DIR/buildkit/cache"
+    install -d -m 0750 -o "$USER" -g "$GROUP" "$LOG_DIR"
+    # Traefik writes and midnight-server reads the same JSON access log. Keep
+    # setgid on the directory so replacement files inherit group midnight
+    # during Traefik rotation or recreation.
+    install -d -m 2770 -o root -g "$GROUP" "$LOG_DIR/traefik"
+    # Traefik writes this file as root while midnight-server tails it for
+    # support-safe ingress evidence. Preserve existing contents on upgrades,
+    # but make the shared group permission explicit.
+    touch "$LOG_DIR/traefik/access.jsonl"
+    chown root:"$GROUP" "$LOG_DIR/traefik/access.jsonl"
+    chmod 0660 "$LOG_DIR/traefik/access.jsonl"
+    install -d -m 0755 -o "$USER" -g "$GROUP" "$RUN_DIR"
+    install -d -m 0755 -o root -g root "$ETC_DIR"
+
+    if [ ! -f "$ETC_DIR/midnight.env" ] && [ -f /usr/share/midnight/midnight.env.default ]; then
+        install -m 0640 -o root -g "$GROUP" /usr/share/midnight/midnight.env.default "$ETC_DIR/midnight.env"
+    fi
+    if [ -f "$ETC_DIR/midnight.env" ]; then
+        set -a
+        # shellcheck disable=SC1091
+        . "$ETC_DIR/midnight.env"
+        set +a
+    fi
+    CURSOR_KEY_PATH="${MIDNIGHT_CURSOR_KEY_PATH:-$CURSOR_KEY_PATH}"
+    AUTOMATION_TOKEN_KEY_PATH="${MIDNIGHT_AUTOMATION_TOKEN_KEY_PATH:-$AUTOMATION_TOKEN_KEY_PATH}"
+    INVITATION_KEY_PATH="${MIDNIGHT_INVITATION_KEY_PATH:-$INVITATION_KEY_PATH}"
+    VARIABLE_INTENT_KEY_PATH="${MIDNIGHT_VARIABLE_INTENT_KEY_PATH:-$VARIABLE_INTENT_KEY_PATH}"
+    KEK_PATH="${MIDNIGHT_KEK_PATH:-$KEK_PATH}"
+    REGISTRY_CONFIG_PATH="${MIDNIGHT_REGISTRY_CONFIG:-$REGISTRY_CONFIG_PATH}"
+    AGENT_CREDENTIALS_PATH="${MIDNIGHT_AGENT_CREDENTIALS_FILE:-$AGENT_CREDENTIALS_PATH}"
+    AGENT_CREDENTIAL_PATH="${MIDNIGHT_AGENT_CREDENTIAL_FILE:-$AGENT_CREDENTIAL_PATH}"
+    TRAEFIK_DYNAMIC_DIR="${MIDNIGHT_WORKER_ROUTE_CONFIG_DIR:-$TRAEFIK_DYNAMIC_DIR}"
+
+    # The variable vault requires exactly 32 raw KEK bytes and rejects any
+    # mode other than 0400. Generate into the destination directory and rename
+    # only after the bytes, ownership, and mode are complete.
+    if [ ! -f "$KEK_PATH" ]; then
+        install -d -m 0755 -o root -g root "$(dirname "$KEK_PATH")"
+        tmp_kek="${KEK_PATH}.tmp.$$"
+        umask 077
+        if ! dd if=/dev/urandom of="$tmp_kek" bs=32 count=1 2>/dev/null; then
+            rm -f "$tmp_kek"
+            echo "midnight: failed to generate variable-encryption KEK" >&2
+            exit 1
+        fi
+        chown "$USER:$GROUP" "$tmp_kek"
+        chmod 0400 "$tmp_kek"
+        mv "$tmp_kek" "$KEK_PATH"
+    fi
+
+    # Production mutations fail closed without a bearer token. Preserve an
+    # operator-supplied non-empty value; otherwise rewrite the shared
+    # EnvironmentFile atomically so server and agent consume the same token.
+    if ! grep -Eq '^MIDNIGHT_API_BEARER_TOKEN=[^[:space:]]+$' "$ETC_DIR/midnight.env"; then
+        tmp_api_random="$ETC_DIR/.api-bearer-random.$$"
+        tmp_env="$ETC_DIR/.midnight.env.$$"
+        umask 077
+        if ! dd if=/dev/urandom of="$tmp_api_random" bs=32 count=1 2>/dev/null; then
+            rm -f "$tmp_api_random" "$tmp_env"
+            echo "midnight: failed to generate API bearer token" >&2
+            exit 1
+        fi
+        api_bearer_token="$(base64 <"$tmp_api_random" | tr -d '\n')"
+        rm -f "$tmp_api_random"
+        sed '/^MIDNIGHT_API_BEARER_TOKEN=/d' "$ETC_DIR/midnight.env" >"$tmp_env"
+        printf '\nMIDNIGHT_API_BEARER_TOKEN=%s\n' "$api_bearer_token" >>"$tmp_env"
+        chown "root:$GROUP" "$tmp_env"
+        chmod 0640 "$tmp_env"
+        mv "$tmp_env" "$ETC_DIR/midnight.env"
+        MIDNIGHT_API_BEARER_TOKEN="$api_bearer_token"
+        export MIDNIGHT_API_BEARER_TOKEN
+    fi
+
+    # Runtime-agent traffic has its own credential class and never uses the
+    # operator recovery bearer. Upgrade installations seed the local agent's
+    # scoped files from the former shared HMAC value, then remove that raw
+    # value from the EnvironmentFile. Multi-host operators add independent
+    # entries to the server keyring before starting remote agents.
+    agent_id="${MIDNIGHT_AGENT_ID:-local-agent}"
+    case "$agent_id" in
+        ''|*[!A-Za-z0-9._-]*)
+            echo "midnight: MIDNIGHT_AGENT_ID contains unsupported keyring characters" >&2
+            exit 1
+            ;;
+    esac
+    if [ -f "$AGENT_CREDENTIALS_PATH" ] && [ ! -f "$AGENT_CREDENTIAL_PATH" ] && [ -z "${MIDNIGHT_AGENT_HMAC_SECRET:-}" ]; then
+        echo "midnight: agent keyring exists but local agent credential is missing; restore or rotate it explicitly" >&2
+        exit 1
+    fi
+    if [ -f "$AGENT_CREDENTIAL_PATH" ]; then
+        agent_credential="$(tr -d '\r\n' <"$AGENT_CREDENTIAL_PATH")"
+    elif [ -n "${MIDNIGHT_AGENT_HMAC_SECRET:-}" ]; then
+        agent_credential="$MIDNIGHT_AGENT_HMAC_SECRET"
+    else
+        tmp_agent_random="$ETC_DIR/.agent-credential-random.$$"
+        umask 077
+        if ! dd if=/dev/urandom of="$tmp_agent_random" bs=32 count=1 2>/dev/null; then
+            rm -f "$tmp_agent_random"
+            echo "midnight: failed to generate agent credential" >&2
+            exit 1
+        fi
+        agent_credential="$(base64 <"$tmp_agent_random" | tr -d '\n')"
+        rm -f "$tmp_agent_random"
+    fi
+    case "$agent_credential" in
+        ''|*[!A-Za-z0-9._~+/=-]*)
+            echo "midnight: local agent credential contains unsupported bearer/keyring characters" >&2
+            exit 1
+            ;;
+    esac
+    if [ "${#agent_credential}" -lt 32 ]; then
+        echo "midnight: local agent credential is shorter than 32 bytes" >&2
+        exit 1
+    fi
+    if [ ! -f "$AGENT_CREDENTIAL_PATH" ]; then
+        tmp_agent_credential="${AGENT_CREDENTIAL_PATH}.tmp.$$"
+        umask 077
+        printf '%s\n' "$agent_credential" >"$tmp_agent_credential"
+        chown root:root "$tmp_agent_credential"
+        chmod 0400 "$tmp_agent_credential"
+        mv "$tmp_agent_credential" "$AGENT_CREDENTIAL_PATH"
+    fi
+    if [ ! -f "$AGENT_CREDENTIALS_PATH" ]; then
+        tmp_agent_keyring="${AGENT_CREDENTIALS_PATH}.tmp.$$"
+        umask 077
+        printf '{"version":1,"agents":{"%s":["%s"]}}\n' "$agent_id" "$agent_credential" >"$tmp_agent_keyring"
+        chown "root:$GROUP" "$tmp_agent_keyring"
+        chmod 0440 "$tmp_agent_keyring"
+        mv "$tmp_agent_keyring" "$AGENT_CREDENTIALS_PATH"
+    fi
+    tmp_env="$ETC_DIR/.midnight.env.$$"
+    sed '/^MIDNIGHT_AGENT_HMAC_SECRET=/d;/^MIDNIGHT_AGENT_CREDENTIALS_FILE=/d;/^MIDNIGHT_AGENT_CREDENTIAL_FILE=/d' "$ETC_DIR/midnight.env" >"$tmp_env"
+    printf '\nMIDNIGHT_AGENT_CREDENTIALS_FILE=%s\nMIDNIGHT_AGENT_CREDENTIAL_FILE=%s\n' "$AGENT_CREDENTIALS_PATH" "$AGENT_CREDENTIAL_PATH" >>"$tmp_env"
+    chown "root:$GROUP" "$tmp_env"
+    chmod 0640 "$tmp_env"
+    mv "$tmp_env" "$ETC_DIR/midnight.env"
+
+    if [ ! -f "$CURSOR_KEY_PATH" ]; then
+        install -d -m 0755 -o root -g root "$(dirname "$CURSOR_KEY_PATH")"
+        tmp_cursor_key="${CURSOR_KEY_PATH}.tmp.$$"
+        umask 077
+        if ! dd if=/dev/urandom bs=48 count=1 2>/dev/null | base64 >"$tmp_cursor_key"; then
+            rm -f "$tmp_cursor_key"
+            echo "midnight: failed to generate cursor signing key" >&2
+            exit 1
+        fi
+        chown "root:$GROUP" "$tmp_cursor_key"
+        chmod 0440 "$tmp_cursor_key"
+        mv "$tmp_cursor_key" "$CURSOR_KEY_PATH"
+    fi
+    # Project automation-token verifiers use an independent HMAC key. Keeping
+    # it separate lets operators rotate cursor/session signing state without
+    # silently invalidating every project CI credential.
+    if [ ! -f "$AUTOMATION_TOKEN_KEY_PATH" ]; then
+        install -d -m 0755 -o root -g root "$(dirname "$AUTOMATION_TOKEN_KEY_PATH")"
+        tmp_automation_token_key="${AUTOMATION_TOKEN_KEY_PATH}.tmp.$$"
+        umask 077
+        if ! dd if=/dev/urandom bs=48 count=1 2>/dev/null | base64 >"$tmp_automation_token_key"; then
+            rm -f "$tmp_automation_token_key"
+            echo "midnight: failed to generate automation token MAC key" >&2
+            exit 1
+        fi
+        chown "root:$GROUP" "$tmp_automation_token_key"
+        chmod 0440 "$tmp_automation_token_key"
+        mv "$tmp_automation_token_key" "$AUTOMATION_TOKEN_KEY_PATH"
+    fi
+    # Invitation bearer verifiers use their own key so credential classes can
+    # be rotated and recovered independently.
+    if [ ! -f "$INVITATION_KEY_PATH" ]; then
+        install -d -m 0755 -o root -g root "$(dirname "$INVITATION_KEY_PATH")"
+        tmp_invitation_key="${INVITATION_KEY_PATH}.tmp.$$"
+        umask 077
+        if ! dd if=/dev/urandom bs=48 count=1 2>/dev/null | base64 >"$tmp_invitation_key"; then
+            rm -f "$tmp_invitation_key"
+            echo "midnight: failed to generate invitation MAC key" >&2
+            exit 1
+        fi
+        chown "root:$GROUP" "$tmp_invitation_key"
+        chmod 0440 "$tmp_invitation_key"
+        mv "$tmp_invitation_key" "$INVITATION_KEY_PATH"
+    fi
+    # Value-bearing tenant variable requests use a keyed intent fingerprint.
+    # This prevents the idempotency table from becoming an offline dictionary
+    # oracle and keeps its rotation independent from other credential classes.
+    if [ ! -f "$VARIABLE_INTENT_KEY_PATH" ]; then
+        install -d -m 0755 -o root -g root "$(dirname "$VARIABLE_INTENT_KEY_PATH")"
+        tmp_variable_intent_key="${VARIABLE_INTENT_KEY_PATH}.tmp.$$"
+        umask 077
+        if ! dd if=/dev/urandom bs=48 count=1 2>/dev/null | base64 >"$tmp_variable_intent_key"; then
+            rm -f "$tmp_variable_intent_key"
+            echo "midnight: failed to generate variable intent MAC key" >&2
+            exit 1
+        fi
+        chown "root:$GROUP" "$tmp_variable_intent_key"
+        chmod 0440 "$tmp_variable_intent_key"
+        mv "$tmp_variable_intent_key" "$VARIABLE_INTENT_KEY_PATH"
+    fi
+    if [ ! -f "$REGISTRY_CONFIG_PATH" ] && [ -f /usr/share/midnight/registry.yml.default ]; then
+        install -d -m 0755 -o root -g root "$(dirname "$REGISTRY_CONFIG_PATH")"
+        install -m 0640 -o root -g "$GROUP" /usr/share/midnight/registry.yml.default "$REGISTRY_CONFIG_PATH"
+    fi
+    if [ -n "$TRAEFIK_DYNAMIC_DIR" ]; then
+        install -d -m 0750 -o "$USER" -g "$GROUP" "$TRAEFIK_DYNAMIC_DIR"
+    fi
+
+    # Docker daemon baseline. Per 0.1-EC4 we REFUSE on conflict and
+    # surface the merged-diff via `midnight doctor --check OR-CHK-DOC-002`.
+    if [ -x /usr/bin/midnight-doctor ] && [ -f "$DAEMON_JSON_BASELINE" ]; then
+        if [ ! -f "$DAEMON_JSON_PATH" ]; then
+            install -d -m 0755 -o root -g root /etc/docker
+            install -m 0644 -o root -g root "$DAEMON_JSON_BASELINE" "$DAEMON_JSON_PATH"
+        else
+            # Don't overwrite. Run the doctor merge probe; if it
+            # reports a conflict, abort the install with the panel-
+            # locked failure code so operators can fix it manually.
+            if ! /usr/bin/midnight-doctor \
+                --check OR-CHK-DOC-002 \
+                --daemon-json-fixture "$DAEMON_JSON_PATH" \
+                --json >/var/lib/midnight/doctor-postinst.json; then
+                echo "midnight: /etc/docker/daemon.json conflicts with the Midnight baseline" >&2
+                echo "midnight: see /var/lib/midnight/doctor-postinst.json and deploy/debian/daemon-json-merge.md" >&2
+                exit 1
+            fi
+        fi
+    fi
+
+    # Apply database migrations when the operator has configured a DSN.
+    # The package ships every reviewed migration through its declared schema
+    # version; the binary refuses checksum drift and records schema_migrations
+    # rows before startup.
+    if [ -x /usr/bin/midnight ]; then
+        DB_DSN_FILE="${MIDNIGHT_DB_DSN_FILE:-$ETC_DIR/db.dsn}"
+        # An operator who writes the DSN before installing cannot chown it to a
+        # user that does not exist yet, so a root-owned file is the normal
+        # result of the documented order. Migrations would still run here (as
+        # root) and every unit would then fail at boot with "permission denied"
+        # on a host that otherwise looks correctly installed. Normalise it the
+        # same way the generated keys are handled.
+        if [ -f "$DB_DSN_FILE" ]; then
+            chown "$USER:$GROUP" "$DB_DSN_FILE"
+            chmod 0600 "$DB_DSN_FILE"
+        fi
+        if [ -n "${MIDNIGHT_DB_DSN:-}" ] || [ -s "$DB_DSN_FILE" ]; then
+            MIDNIGHT_DB_DSN_FILE="$DB_DSN_FILE" /usr/bin/midnight admin migrate --yes || {
+                echo "midnight: schema migration failed; see journalctl -u midnight-server" >&2
+                exit 1
+            }
+        else
+            echo "midnight: skipping schema migrations; configure MIDNIGHT_DB_DSN or $DB_DSN_FILE before starting midnight-server" >&2
+        fi
+    fi
+
+    # Reload must succeed before an upgrade can restart any saved unit. A
+    # failed reload retains the active-unit snapshot for `dpkg --configure -a`.
+    reload_systemd_units
+
+    # Execute the exact package-install readiness profile against live default
+    # paths. Host checks requiring captured Docker/socket/firewall facts are
+    # deliberately outside this report rather than appearing as false skips.
+    run_postinstall_doctor
+    if [ -n "${2:-}" ]; then
+        restart_previously_active_units
+    fi
+    ;;
+abort-upgrade)
+    restart_previously_active_units
+    ;;
+abort-remove|abort-deconfigure)
+    ;;
+*)
+    echo "postinst called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

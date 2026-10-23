@@ -1,0 +1,70 @@
+# Midnight GitHub App registration manifest.
+#
+# Per ADR 0022 the operator registers a per-installation GitHub App
+# pointing at their Midnight instance. The manifest below is the
+# panel-locked permission + event set Midnight needs to auto-deploy repos on
+# push and publish pull-request preview lifecycle comments.
+#
+# To register the App:
+#
+#   1. Tools / scripts/render-github-app-manifest.sh emits the JSON
+#      this YAML represents, with placeholders substituted for the
+#      operator's deployment-specific URLs.
+#   2. The operator visits
+#        https://github.com/settings/apps/new?state=midnight&manifest=<urlencoded>
+#      OR (for an org-owned App)
+#        https://github.com/organizations/{org}/settings/apps/new?state=midnight&manifest=<urlencoded>
+#   3. GitHub redirects to redirect_url with a temporary manifest-conversion
+#      code. Exchange that code directly with GitHub and save the returned App
+#      credentials. This registration callback is distinct from setup_url,
+#      which Midnight handles when a workspace admin installs the ready App.
+#   4. The operator sets:
+#        MIDNIGHT_GITHUB_APP_ID
+#        MIDNIGHT_GITHUB_PRIVATE_KEY_PATH
+#        MIDNIGHT_GITHUB_WEBHOOK_SECRET
+#        MIDNIGHT_GITHUB_CLIENT_ID
+#        MIDNIGHT_GITHUB_CLIENT_SECRET
+#        MIDNIGHT_GITHUB_APP_SLUG
+#        MIDNIGHT_GITHUB_CALLBACK_URL
+#      and restarts the server.
+#   5. The operator installs the App on the repos they want
+#      auto-deployed and links each service via
+#        PUT /api/v1alpha/services/{id}/github
+#
+# See docs/github-app.md for the full walkthrough.
+
+name: "Midnight (self-hosted)"
+url: "https://midnight.example.com"
+description: |
+  Auto-deploy on push for a self-hosted Midnight Railway-clone instance.
+  Subscribes to push, installation, installation_repositories, and
+  pull_request events. Requests the minimum permissions panel-locked in
+  ADR 0017: contents read, metadata read, statuses write, checks write,
+  deployments write, pull_requests write.
+
+# Operator MUST replace these with their public Midnight URL before
+# rendering the App via the manifest flow.
+hook_attributes:
+  url: "https://midnight.example.com/api/v1alpha/webhooks/inbound/github/{ENDPOINT_ID}"
+  active: true
+redirect_url: "https://midnight.example.com/setup/github/callback"
+callback_urls:
+  - "https://midnight.example.com/api/v1alpha/github/setup/callback"
+setup_url: "https://midnight.example.com/api/v1alpha/github/setup/callback"
+request_oauth_on_install: true
+
+public: false
+
+default_events:
+  - push
+  - pull_request
+  - installation
+  - installation_repositories
+
+default_permissions:
+  contents: read
+  metadata: read
+  statuses: write
+  checks: write
+  deployments: write
+  pull_requests: write

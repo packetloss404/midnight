@@ -1,0 +1,33 @@
+http:
+  routers:
+    acme-http01-challenge:
+      rule: 'PathPrefix(`/.well-known/acme-challenge/`)'
+      service: 'acme-http@internal'
+      entryPoints:
+        - 'web'
+      priority: 2147483647
+    internal:
+      rule: 'Host(`internal.example.test`) && PathPrefix(`/`)'
+      service: 'internal-service'
+      entryPoints:
+        - 'websecure'
+      tls:
+        certResolver: 'letsencrypt'
+        options: 'modern-tls'
+        clientAuthHint: 'operator-mtls-required'
+  services:
+    internal-service:
+      loadBalancer:
+        servers:
+          - url: 'http://10.0.0.4:8080'
+tls:
+  options:
+    modern-tls:
+      minVersion: 'VersionTLS13'
+      cipherSuites:
+        - 'TLS_AES_128_GCM_SHA256'
+        - 'TLS_AES_256_GCM_SHA384'
+      clientAuth:
+        clientAuthType: 'RequireAndVerifyClientCert'
+        caFiles:
+          - '/etc/midnight/mtls/ca.pem'

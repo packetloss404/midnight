@@ -1,0 +1,210 @@
+version: '3'
+
+vars:
+  RELEASE_EVIDENCE_DIR: '{{.RELEASE_EVIDENCE_DIR | default "artifacts/phase0"}}'
+  RELEASE_EVIDENCE_JSON: '{{.RELEASE_EVIDENCE_JSON | default (printf "%s/release-evidence.json" .RELEASE_EVIDENCE_DIR)}}'
+  RELEASE_EVIDENCE_INDEX_JSON: '{{.RELEASE_EVIDENCE_INDEX_JSON | default (printf "%s/release-evidence-index.json" .RELEASE_EVIDENCE_DIR)}}'
+  RELEASE_SUMMARY_JSON: '{{.RELEASE_SUMMARY_JSON | default (printf "%s/release-summary.json" .RELEASE_EVIDENCE_DIR)}}'
+
+tasks:
+  bootstrap:
+    desc: Verify baseline local tools
+    cmds:
+      - go version
+      - npm --version
+
+  build:
+    desc: Build all Go binaries
+    cmds:
+      - go build ./...
+
+  web:embed:
+    desc: Build the web-next console and stage it for go:embed into midnight-server
+    cmds:
+      - cd web-next && npm ci && npm run build
+      - test -f web-next/dist/index.html
+      - find internal/api/webdist -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf -- {} +
+      - cp -R web-next/dist/. internal/api/webdist/
+      - test -f internal/api/webdist/index.html
+
+  build:server:
+    desc: Build the self-contained midnight-server binary (console embedded)
+    cmds:
+      - test -f internal/api/webdist/index.html || { echo "ERROR: run 'task web:embed' before building midnight-server" >&2; exit 1; }
+      - go build -trimpath -o build/midnight-server ./cmd/midnight-server
+
+  test:
+    desc: Run Go tests
+    cmds:
+      - go test ./... -count=1
+
+  format:
+    desc: Format Go source files
+    cmds:
+      - gofmt -w cmd internal pkg tools
+
+  db-integration:
+    desc: Run Phase 1 / Lane 1 (DATA) Postgres testcontainer integration tests
+    cmds:
+      - go test -tags=integration -count=1 -timeout=10m ./internal/db/...
+
+  lint:
+    desc: Run baseline lint checks
+    cmds:
+      - test -z "$(gofmt -l cmd internal pkg tools)"
+      - go vet ./...
+      - go run ./tools/lint
+
+  supplychain:
+    desc: Run local dependency inventory and npm production audit
+    cmds:
+      - echo "supplychain: local dependency inventory plus npm production audit"
+      - go list ./...
+
+  audit:
+    desc: Run audit checks
+    deps:
+      - supplychain
+
+  phase0-gate:
+    desc: Run Phase 0 foundation gate checks
+    deps:
+      - lint
+      - test
+      - build
+      - audit
+      - phase0-drills
+
+  phase0-drills:
+    desc: Run Phase 0 gate with executable drills enabled
+    cmds:
+      - go run ./tools/phase0-gate --format=json --execute-drills
+
+  release-check:
+    desc: Run complete local release verification chain
+    cmds:
+      - mkdir -p {{.RELEASE_EVIDENCE_DIR}}
+      - go test ./...
+      - go vet ./...
+      - go build ./...
+      - go run ./tools/lint
+      - go run ./tools/contract-tests
+      - scripts/generate-midnightctl.sh check
+      - go run ./tools/api-client-contract --check
+      - go run ./tools/contract-tests/schemathesis
+      - go run ./tools/api-contract-views --stable-output api/openapi/v1/midnight.yaml --check
+      - go run ./tools/api-v1-graduation --format=json --require-ready
+      - go test ./internal/cloudevents -run TestAsyncAPIEventCatalogMatchesRuntime -count=1
+      - go run ./tools/phase0-gate --format=json --execute-drills --require-executed-drills --release-evidence {{.RELEASE_EVIDENCE_JSON}} --release-evidence-index {{.RELEASE_EVIDENCE_INDEX_JSON}} --verify-release-evidence-index {{.RELEASE_EVIDENCE_INDEX_JSON}} --verify-evidence-files --release-summary {{.RELEASE_SUMMARY_JSON}}
+      - go run ./tools/phase0-gate --format=json --verify-release-evidence-index {{.RELEASE_EVIDENCE_INDEX_JSON}} --verify-evidence-files
+      - npm --prefix web-next ci
+      - npm --prefix web-next test
+      - npm --prefix web-next run typecheck
+      - npm --prefix web-next run build
+      - npm audit --omit=dev --package-lock-only --prefix web-next
+
+  clean-artifacts:
+    desc: Remove generated Phase 0 artifact contents only
+    cmds:
+      - test "{{.RELEASE_EVIDENCE_DIR}}" = "artifacts/phase0"
+      - mkdir -p {{.RELEASE_EVIDENCE_DIR}}
+      - find {{.RELEASE_EVIDENCE_DIR}} -mindepth 1 -maxdepth 1 -exec rm -rf -- {} +
+
+  generate:
+    desc: Run go generate hooks declared in source files
+    cmds:
+      - go generate ./...
+
+  generate-midnightctl:
+    desc: Generate the v1alpha Go client and models
+    cmds:
+      - scripts/generate-midnightctl.sh generate
+
+  generate-midnightctl-check:
+    desc: Verify the generated v1alpha Go client and models are current
+    cmds:
+      - scripts/generate-midnightctl.sh check
+
+  api-contract-views:
+    desc: Generate audience-specific OpenAPI views from the canonical bundle
+    cmds:
+      - go run ./tools/api-contract-views --stable-output api/openapi/v1/midnight.yaml
+
+  api-contract-views-check:
+    desc: Verify generated audience-specific OpenAPI views are current
+    cmds:
+      - go run ./tools/api-contract-views --stable-output api/openapi/v1/midnight.yaml --check
+
+  api-contract-check:
+    desc: Verify generated clients, stateful API behavior, REST views, live routes, and event catalog conformance
+    cmds:
+      - go run ./tools/api-contract-metadata --check
+      - go run ./tools/contract-tests
+      - go run ./tools/api-client-contract --check
+      - go test ./pkg/midnightctl ./tools/api-client-contract ./tools/contract-tests/schemathesis -count=1
+      - go run ./tools/contract-tests/schemathesis
+      - go run ./tools/api-contract-views --stable-output api/openapi/v1/midnight.yaml --check
+      - go test ./internal/api -run 'Test(OpenAPIRouteContract|ProductionRuntimeRoutesAreDocumented)$' -count=1
+      - go test ./internal/cloudevents -run TestAsyncAPIEventCatalogMatchesRuntime -count=1
+
+  api-v1-graduation-report:
+    desc: Report stable-v1 OpenAPI graduation blockers without failing
+    cmds:
+      - go run ./tools/api-v1-graduation --format=json
+
+  api-v1-graduation-check:
+    desc: Require the canonical OpenAPI contract to be ready for stable v1
+    cmds:
+      - go run ./tools/api-v1-graduation --format=json --require-ready
+
+  adr-index:
+    desc: Verify ADR index exists
+    cmds:
+      - test -f docs/adr/README.md
+
+  doctor:
+    desc: Run midnight doctor in fixture/hint mode (set MIDNIGHT_DOCTOR_LIVE=1 for live)
+    cmds:
+      - go run ./cmd/midnight-doctor
+
+  package-deb:
+    desc: Build the unsigned midnight .deb (Debian / Ubuntu host required)
+    platforms: [linux]
+    cmds:
+      - mkdir -p build/deb
+      - cp -R deploy/debian debian
+      - defer: rm -rf debian
+      - dpkg-buildpackage -us -uc -b
+
+  package-deb-sign:
+    desc: Build and GPG-sign the midnight .deb (set MIDNIGHT_RELEASE_GPG_KEYID)
+    platforms: [linux]
+    preconditions:
+      - sh: 'test -n "$MIDNIGHT_RELEASE_GPG_KEYID"'
+        msg: "set MIDNIGHT_RELEASE_GPG_KEYID to the signing key id"
+    cmds:
+      - mkdir -p build/deb
+      - cp -R deploy/debian debian
+      - defer: rm -rf debian
+      - dpkg-buildpackage --sign-key=$MIDNIGHT_RELEASE_GPG_KEYID -b
+
+  dev-up:
+    desc: Bring up the local dev stack (docker-compose.local.yml)
+    cmds:
+      - mkdir -p .midnight/local/traefik/dynamic .midnight/local/traefik/acme
+      - docker compose -f docker-compose.local.yml up -d --build
+
+  dev-down:
+    desc: Tear down the local dev stack
+    cmds:
+      - docker compose -f docker-compose.local.yml down
+
+  dev-logs:
+    desc: Follow logs from the local dev stack
+    cmds:
+      - docker compose -f docker-compose.local.yml logs -f
+
+  dev-doctor:
+    desc: Run local dev stack health checks (pass -- --live once the stack is up)
+    cmds:
+      - bash scripts/dev/doctor.sh {{.CLI_ARGS}}

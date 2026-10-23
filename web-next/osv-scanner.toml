@@ -1,0 +1,9 @@
+[[IgnoredVulns]]
+id = "GHSA-vfj7-8cjw-p6xm"
+ignoreUntil = 2026-11-06
+reason = "braces is present only through Tailwind's build-time file matching, receives repository-controlled patterns, is excluded from production installs, and has no patched release yet"
+
+[[IgnoredVulns]]
+id = "GHSA-rj75-hqrm-r3gf"
+ignoreUntil = 2026-11-06
+reason = "postcss-selector-parser is used only by Tailwind against repository-controlled CSS at build time and is excluded from production installs; upgrading requires the Tailwind 4 migration"

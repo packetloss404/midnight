@@ -1,0 +1,38 @@
+[Unit]
+Description=Midnight worker
+Documentation=https://github.com/midnight/midnight
+After=network-online.target postgresql.service docker.service midnight-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=midnight
+Group=midnight
+# Docker API access is host-root equivalent; Phase 0 single-server deploy
+# workers need it for the Docker runtime backend.
+SupplementaryGroups=docker
+EnvironmentFile=-/etc/midnight/midnight.env
+# Optional root-readable, worker-only provider credential file. It should
+# contain CLOUDFLARE_DNS_API_TOKEN=... and must not be shared with the API or
+# build worker units.
+EnvironmentFile=-/etc/midnight/cloudflare.env
+ExecStart=/usr/bin/midnight-worker serve
+Restart=on-failure
+RestartSec=5s
+StateDirectory=midnight
+LogsDirectory=midnight
+RuntimeDirectory=midnight
+# midnight-buildkit nests its socket at /run/midnight/buildkit, inside the
+# directory this unit owns. Without this, restarting this unit deletes
+# /run/midnight and destroys that socket, after which every source build
+# fails with an unexplained "buildctl solve failed: exit status 1" while
+# buildkitd keeps running on an unlinked inode.
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/etc/midnight/traefik/dynamic
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

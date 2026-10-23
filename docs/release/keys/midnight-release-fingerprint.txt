@@ -1,0 +1,56 @@
+# =====================================================================
+# Midnight release-signing key fingerprint(s)
+# =====================================================================
+#
+#   ###############################################################
+#   # NO TRUSTED RELEASE FINGERPRINT IS PUBLISHED YET             #
+#   # The example line below is commented out and must not be      #
+#   # used to verify or trust release artifacts.                   #
+#   ###############################################################
+#
+# Format (one signing identity per non-comment line):
+#
+#   <algorithm> <fingerprint-hex> <created-date> <subject>
+#
+# Where:
+#   - <algorithm>      one of: ed25519 | rsa4096 | nistp256
+#   - <fingerprint-hex> 40-char (RSA SHA-1) or 64-char (Ed25519 / ECC)
+#                      hex fingerprint, lowercase, no separators
+#   - <created-date>   ISO-8601 UTC date (YYYY-MM-DD) when the key was
+#                      generated on the YubiKey
+#   - <subject>        OpenPGP user-id, e.g. "Midnight Release Signing
+#                      Key <release@example.invalid>" (replace with the
+#                      real project domain before trusted releases)
+#
+# Multiple non-comment lines are allowed during a rotation overlap
+# window (per RELEASE_KEY_CUSTODY.md Step 9 — annual rotation; 30-day
+# overlap). Operators trust ANY listed fingerprint until the outgoing
+# line is removed.
+#
+# Lifecycle:
+#   - Created  during release-key provisioning.
+#   - Published in this repo (above) AND on the project website
+#              (project website URL to be announced with the first
+#              trusted release).
+#   - Verified by operators with `dscverify` against a downloaded
+#              .changes file plus a `diff` between the two source
+#              copies.
+#   - Revoked  by writing a `REVOKED-<FINGERPRINT>.txt` file in this
+#              directory plus a tombstone tag (RELEASE_KEY_CUSTODY.md
+#              Step 8). The verifier emits RELEASE_REVOKED_KEY for any
+#              .deb signed by a fingerprint with a matching REVOKED-*
+#              file.
+#
+# Failure codes that may surface during verification:
+#   - RELEASE_FINGERPRINT_MISMATCH — on-disk and remote copies differ.
+#   - RELEASE_REVOKED_KEY          — fingerprint appears in a
+#                                    REVOKED-*.txt file in this dir.
+#
+# Cross-references:
+#   - docs/release-verify.md "Verify the alpha release end-to-end"
+#   - internal/failurecodes/codes.go (RELEASE_FINGERPRINT_MISMATCH,
+#                                     RELEASE_REVOKED_KEY)
+#
+# =====================================================================
+# UNTRUSTED EXAMPLE ONLY:
+# ed25519 0000000000000000000000000000000000000000000000000000000000000000 1970-01-01 UNTRUSTED EXAMPLE (not a Midnight release key)

@@ -1,0 +1,13 @@
+DROP TRIGGER IF EXISTS environments_usage_limit_before_write ON environments;
+DROP TRIGGER IF EXISTS services_usage_limit_before_write ON services;
+DROP TRIGGER IF EXISTS projects_usage_limit_before_write ON projects;
+DROP FUNCTION IF EXISTS midnight_enforce_workspace_count_limit();
+DROP TABLE IF EXISTS usage_admission_decisions;
+DROP TABLE IF EXISTS usage_reservations;
+DROP TABLE IF EXISTS usage_evidence_gaps;
+DROP TABLE IF EXISTS usage_source_cursors;
+DROP TABLE IF EXISTS usage_events;
+DROP TABLE IF EXISTS workspace_usage_policy_profiles;
+DROP TABLE IF EXISTS usage_policy_limits;
+DROP TABLE IF EXISTS usage_policy_profiles;
+DELETE FROM schema_migrations WHERE version=59 AND name='usage_limits';

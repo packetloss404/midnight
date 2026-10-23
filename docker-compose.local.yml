@@ -1,0 +1,494 @@
+# Midnight local development stack.
+#
+# Ported from the legacy "midnightlight" reference stack and remapped onto the
+# real cmd/ layout of github.com/midnight/midnight:
+#
+#   api           -> go run ./cmd/midnight-server serve
+#   deploy-worker -> go run ./cmd/midnight-worker serve
+#   build-worker  -> go run ./cmd/midnight-buildkit worker
+#   migrate       -> go run ./cmd/midnight admin migrate --no-prompt
+#
+# registry + buildkit + traefik + postgres run as upstream images. cmd/midnight-registry
+# and cmd/midnight-buildkit `serve` are the production orchestrators for those same
+# pinned binaries; locally we run the daemons directly (mirrors the reference stack).
+#
+# Usage:
+#   make dev-up        # docker compose -f docker-compose.local.yml up -d --build
+#   make dev-logs
+#   make dev-down
+#
+# Or drive compose directly (env overrides are optional; sane defaults are baked in):
+#   docker compose -f docker-compose.local.yml up -d --build
+#
+# All host ports bind to 127.0.0.1 only. Durable state lives in named volumes;
+# helper/traefik file-provider state lives under the git-ignored .midnight/ dir.
+name: ${COMPOSE_PROJECT_NAME:-midnight-local}
+
+# Canonical Postgres DSN. Every binary reads $MIDNIGHT_DB_DSN first (pg.EnvDSN),
+# then falls back to $MIDNIGHT_DATABASE_URL.
+x-database-url: &database-url ${MIDNIGHT_DATABASE_URL:-postgresql://${MIDNIGHT_POSTGRES_USER:-midnight}:${MIDNIGHT_POSTGRES_PASSWORD:-midnight}@postgres:5432/${MIDNIGHT_POSTGRES_DB:-midnight}?sslmode=disable}
+
+x-go-image: &go-image golang:${MIDNIGHT_GO_IMAGE_TAG:-1.26.9}-bookworm
+
+x-go-volumes: &go-volumes
+  - type: bind
+    source: .
+    target: /workspace
+  - midnight-go-mod-cache:/go/pkg/mod
+  - midnight-go-build-cache:/root/.cache/go-build
+
+# TCP-liveness probe used by the api service. Main exposes no unauthenticated
+# /health path, so we probe that the listener accepts a connection on :8080.
+x-tcp-healthcheck: &api-healthcheck
+  test:
+    - CMD-SHELL
+    - >-
+      bash -c 'exec 3<>/dev/tcp/127.0.0.1/8080'
+  interval: 10s
+  timeout: 5s
+  retries: 12
+  start_period: 40s
+
+services:
+  # Generate the local-only cursor, independent credential/intent keys,
+  # variable KEK, and backup key once into a named volume. API, build worker,
+  # and deploy worker mount the same KEK so envelopes written by the control
+  # plane remain decryptable only at the build/runtime injection boundaries.
+  secrets-init:
+    image: alpine:3.21
+    restart: "no"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        umask 077
+        test -s /run/midnight-secrets/cursor.key || head -c 32 /dev/urandom > /run/midnight-secrets/cursor.key
+        test -s /run/midnight-secrets/kek || head -c 32 /dev/urandom > /run/midnight-secrets/kek
+        test -s /run/midnight-secrets/automation-token.key || head -c 32 /dev/urandom > /run/midnight-secrets/automation-token.key
+        test -s /run/midnight-secrets/invitation.key || head -c 32 /dev/urandom > /run/midnight-secrets/invitation.key
+        test -s /run/midnight-secrets/variable-intent.key || head -c 32 /dev/urandom > /run/midnight-secrets/variable-intent.key
+        test -s /run/midnight-secrets/backup.key || head -c 32 /dev/urandom > /run/midnight-secrets/backup.key
+        chown 65532:65532 \
+          /run/midnight-secrets/cursor.key \
+          /run/midnight-secrets/kek \
+          /run/midnight-secrets/automation-token.key \
+          /run/midnight-secrets/invitation.key \
+          /run/midnight-secrets/variable-intent.key
+        chmod 0400 \
+          /run/midnight-secrets/cursor.key \
+          /run/midnight-secrets/kek \
+          /run/midnight-secrets/automation-token.key \
+          /run/midnight-secrets/invitation.key \
+          /run/midnight-secrets/variable-intent.key \
+          /run/midnight-secrets/backup.key
+    volumes:
+      - midnight-control-secrets:/run/midnight-secrets
+
+  # The API and packaged build worker deliberately share numeric UID/GID
+  # 65532. Repair existing development volumes as well as fresh ones before
+  # either process touches source artifacts; otherwise a root-run `go run` API
+  # can publish 0600 blobs that the nonroot worker cannot materialize.
+  local-source-init:
+    image: alpine:3.21
+    restart: "no"
+    command:
+      - /bin/sh
+      - -ec
+      - |
+        install -d -m 0750 /var/lib/midnight/uploads
+        install -d -m 0750 /var/cache/midnight/go-build
+        install -d -m 0750 /go/pkg/mod
+        chown -R 65532:65532 \
+          /var/lib/midnight/uploads \
+          /var/cache/midnight/go-build \
+          /go/pkg/mod
+    volumes:
+      - midnight-up-uploads:/var/lib/midnight/uploads
+      - midnight-api-go-build-cache:/var/cache/midnight/go-build
+      - midnight-api-go-mod-cache:/go/pkg/mod
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${MIDNIGHT_POSTGRES_DB:-midnight}
+      POSTGRES_USER: ${MIDNIGHT_POSTGRES_USER:-midnight}
+      POSTGRES_PASSWORD: ${MIDNIGHT_POSTGRES_PASSWORD:-midnight}
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    ports:
+      - 127.0.0.1:${MIDNIGHT_POSTGRES_PORT:-15432}:5432
+    volumes:
+      - midnight-postgres-data:/var/lib/postgresql/data
+    networks:
+      - midnight-control
+
+  # One-shot migration step. Uses Midnight's own advisory-lock-guarded runner
+  # (`midnight admin migrate`) which writes the manifest-driven schema_migrations
+  # table. NOTE: this is NOT golang-migrate; the upstream migrate/migrate image is
+  # deliberately not used because its schema_migrations layout is incompatible.
+  migrate:
+    image: *go-image
+    restart: "no"
+    working_dir: /workspace
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command:
+      - /bin/sh
+      - -ec
+      - exec go run ./cmd/midnight admin migrate --no-prompt
+    environment:
+      MIDNIGHT_DB_DSN: *database-url
+      MIDNIGHT_DATABASE_URL: *database-url
+    volumes: *go-volumes
+    networks:
+      - midnight-control
+
+  registry:
+    image: registry:3.0.0
+    restart: unless-stopped
+    environment:
+      REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY: /var/lib/registry
+      REGISTRY_HTTP_ADDR: 0.0.0.0:5000
+    ports:
+      - 127.0.0.1:${MIDNIGHT_REGISTRY_PORT:-15000}:5000
+    volumes:
+      - midnight-registry-data:/var/lib/registry
+    networks:
+      - midnight-control
+
+  buildkit:
+    image: moby/buildkit:v0.28.1-rootless
+    restart: unless-stopped
+    command:
+      - --addr
+      - tcp://0.0.0.0:1234
+      - --oci-worker-no-process-sandbox
+    environment:
+      BUILDKITD_FLAGS: --oci-worker-no-process-sandbox
+    ports:
+      - 127.0.0.1:${MIDNIGHT_BUILDKIT_PORT:-11234}:1234
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    volumes:
+      - midnight-buildkit-cache:/home/user/.local/share/buildkit
+    networks:
+      - midnight-control
+
+  traefik:
+    image: traefik:v3.1.5
+    container_name: midnight-traefik
+    restart: unless-stopped
+    command:
+      - --configFile=/etc/traefik/traefik.yml
+    ports:
+      - 127.0.0.1:${MIDNIGHT_TRAEFIK_HTTP_PORT:-8081}:80
+      - 127.0.0.1:${MIDNIGHT_TRAEFIK_HTTPS_PORT:-8443}:443
+      - 127.0.0.1:${MIDNIGHT_TRAEFIK_DASHBOARD_PORT:-8082}:8080
+    volumes:
+      - type: bind
+        source: ./config/traefik/traefik.yml
+        target: /etc/traefik/traefik.yml
+        read_only: true
+      - type: bind
+        source: ${MIDNIGHT_TRAEFIK_DYNAMIC:-.midnight/local/traefik/dynamic}
+        target: /etc/traefik/dynamic
+      - type: bind
+        source: ${MIDNIGHT_TRAEFIK_ACME:-.midnight/local/traefik/acme}
+        target: /etc/traefik/acme
+      - midnight-traefik-logs:/var/log/midnight/traefik
+    networks:
+      - midnight-control
+      - midnight-ingress
+
+  api:
+    image: *go-image
+    user: "65532:65532"
+    restart: unless-stopped
+    working_dir: /workspace
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      secrets-init:
+        condition: service_completed_successfully
+      local-source-init:
+        condition: service_completed_successfully
+    command:
+      - /bin/sh
+      - -ec
+      - exec go run ./cmd/midnight-server serve
+    environment:
+      # Listen on all interfaces inside the container (default is 127.0.0.1:8080).
+      MIDNIGHT_SERVER_ADDR: ${MIDNIGHT_SERVER_ADDR:-:8080}
+      MIDNIGHT_STORAGE: ${MIDNIGHT_STORAGE:-postgres}
+      # The server embeds its console (internal/api/webdist, staged by
+      # `make web-embed`). Locally we point it at the live bind-mounted build
+      # instead, so `npm --prefix web-next run build` shows up on the next
+      # request without recompiling Go. Run `make web-build` at least once, or
+      # "/" answers 503 with an explicit "console not built" page.
+      MIDNIGHT_WEB_DIST_DIR: ${MIDNIGHT_WEB_DIST_DIR:-/workspace/web-next/dist}
+      MIDNIGHT_DB_DSN: *database-url
+      MIDNIGHT_DATABASE_URL: *database-url
+      # Bearer token gating dashboard + product-API mutations (ProductionAuthRequired).
+      MIDNIGHT_API_BEARER_TOKEN: ${MIDNIGHT_API_BEARER_TOKEN:-dev-secret}
+      MIDNIGHT_AGENT_HMAC_SECRET: ${MIDNIGHT_AGENT_HMAC_SECRET:-dev-agent-hmac-secret}
+      MIDNIGHT_AGENT_AUTH_DEVELOPMENT: "1"
+      MIDNIGHT_CURSOR_KEY_PATH: /run/midnight-secrets/cursor.key
+      MIDNIGHT_KEK_PATH: /run/midnight-secrets/kek
+      MIDNIGHT_AUTOMATION_TOKEN_KEY_PATH: /run/midnight-secrets/automation-token.key
+      MIDNIGHT_INVITATION_KEY_PATH: /run/midnight-secrets/invitation.key
+      MIDNIGHT_VARIABLE_INTENT_KEY_PATH: /run/midnight-secrets/variable-intent.key
+      MIDNIGHT_UP_EXTRACTION_ROOT: /var/lib/midnight/uploads
+      MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_QUOTA_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_QUOTA_BYTES:-5368709120}
+      MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_BYTES:-209715200}
+      MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_COUNT: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_COUNT:-4}
+      MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_BYTES:-1073741824}
+      MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_COUNT: ${MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_COUNT:-32}
+      MIDNIGHT_SOURCE_ARTIFACT_UPLOAD_LEASE: ${MIDNIGHT_SOURCE_ARTIFACT_UPLOAD_LEASE:-10m}
+      MIDNIGHT_SOURCE_ARTIFACT_ORPHAN_CHARGE_RETENTION: ${MIDNIGHT_SOURCE_ARTIFACT_ORPHAN_CHARGE_RETENTION:-26h}
+      GOCACHE: /var/cache/midnight/go-build
+      GOMODCACHE: /go/pkg/mod
+      MIDNIGHT_GRAPHQL_PLAYGROUND: ${MIDNIGHT_GRAPHQL_PLAYGROUND:-1}
+      MIDNIGHT_APPS_DOMAIN: ${MIDNIGHT_APPS_DOMAIN:-apps.localhost}
+      # Executable single-host TCP proxy. The host mapping below is deliberately
+      # bounded to 100 ports; generated DNS remains operator-managed and the API
+      # reports external reachability as unverified.
+      MIDNIGHT_TCP_PROXY_BASE_DOMAIN: ${MIDNIGHT_TCP_PROXY_BASE_DOMAIN:-apps.localhost}
+      MIDNIGHT_TCP_PROXY_PORT_START: ${MIDNIGHT_TCP_PROXY_PORT_START:-20000}
+      MIDNIGHT_TCP_PROXY_PORT_END: ${MIDNIGHT_TCP_PROXY_PORT_END:-20099}
+      MIDNIGHT_TRAEFIK_ACCESS_LOG_PATH: /var/log/midnight/traefik/access.jsonl
+      MIDNIGHT_BACKUP_DESTINATION_URI: file:///var/lib/midnight/backups
+      # True because this stack configures the Docker deploy worker with the
+      # same off-host-style destination and a distinct private archive key.
+      MIDNIGHT_BACKUP_EXECUTOR_AVAILABLE: "true"
+      # Optional: enables the in-dashboard agent chat panel when set.
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck: *api-healthcheck
+    ports:
+      - 127.0.0.1:${MIDNIGHT_API_PORT:-8080}:8080
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+      - midnight-api-go-mod-cache:/go/pkg/mod
+      - midnight-api-go-build-cache:/var/cache/midnight/go-build
+      - midnight-up-uploads:/var/lib/midnight/uploads
+      - midnight-control-secrets:/run/midnight-secrets:ro
+      - midnight-traefik-logs:/var/log/midnight/traefik:ro
+      - midnight-backup-data:/var/lib/midnight/backups:ro
+    networks:
+      - midnight-control
+
+  # Built from deploy/oci/deploy-worker/Dockerfile (Go + docker CLI + git + CA
+  # certs), the same treatment build-worker already gets. The toolchain used to
+  # be apt-installed on every container start, which cost 30-60s per restart.
+  # Source is still bind-mounted and run with `go run`, so a code change only
+  # needs `docker compose restart deploy-worker`.
+  deploy-worker:
+    image: midnight-deploy-worker:local
+    build:
+      context: .
+      dockerfile: deploy/oci/deploy-worker/Dockerfile
+      args:
+        GO_VERSION: ${MIDNIGHT_GO_IMAGE_TAG:-1.26.9}
+    container_name: midnight-deploy-worker
+    restart: unless-stopped
+    working_dir: /workspace
+    depends_on:
+      api:
+        condition: service_healthy
+      secrets-init:
+        condition: service_completed_successfully
+      traefik:
+        condition: service_started
+    command:
+      - serve
+    environment:
+      MIDNIGHT_DB_DSN: *database-url
+      MIDNIGHT_DATABASE_URL: *database-url
+      MIDNIGHT_WORKER_ID: ${MIDNIGHT_WORKER_ID:-midnight-deploy-worker-local}
+      # Real container deploys through the host Docker Engine.
+      MIDNIGHT_WORKER_RUNTIME_BACKEND: ${MIDNIGHT_WORKER_RUNTIME_BACKEND:-docker}
+      MIDNIGHT_WORKER_DOCKER_HOST: ${MIDNIGHT_WORKER_DOCKER_HOST:-unix:///var/run/docker.sock}
+      DOCKER_HOST: ${MIDNIGHT_WORKER_DOCKER_HOST:-unix:///var/run/docker.sock}
+      # Developer engines (Docker Desktop, rootless) cannot satisfy the
+      # installed daemon.json baseline; log conflicts instead of crash-looping.
+      MIDNIGHT_WORKER_DOCKER_BASELINE: ${MIDNIGHT_WORKER_DOCKER_BASELINE:-warn}
+      # The worker runs inside this container; attach it to each environment
+      # bridge so readiness probes can reach deployed workloads.
+      MIDNIGHT_WORKER_PROBE_CONTAINER: ${MIDNIGHT_WORKER_PROBE_CONTAINER:-midnight-deploy-worker}
+      MIDNIGHT_WORKER_POLL_INTERVAL: ${MIDNIGHT_WORKER_POLL_INTERVAL:-1s}
+      MIDNIGHT_WORKER_LEASE_TTL: ${MIDNIGHT_WORKER_LEASE_TTL:-2m}
+      MIDNIGHT_WORKER_RECLAIM_INTERVAL: ${MIDNIGHT_WORKER_RECLAIM_INTERVAL:-30s}
+      MIDNIGHT_KEK_PATH: /run/midnight-secrets/kek
+      # Accept immutable sha256 references produced by this local registry plus
+      # the exact digest-pinned official database images. Other external
+      # registry references and tag-only references remain fail-closed.
+      MIDNIGHT_REGISTRY_ENDPOINT: ${MIDNIGHT_REGISTRY_ENDPOINT:-registry:5000}
+      MIDNIGHT_WORKER_TRUST_LOCAL_REGISTRY: ${MIDNIGHT_WORKER_TRUST_LOCAL_REGISTRY:-true}
+      MIDNIGHT_WORKER_TRUSTED_IMAGES: ${MIDNIGHT_WORKER_TRUSTED_IMAGES:-mongo:7.0.9@sha256:97aac78a80553735b3d9b9b7212803468781b4859645f892a3d04e6b621a7b77,mysql:8.4.0@sha256:dab7049abafe3a0e12cbe5e49050cf149881c0cd9665c289e5808b9dad39c9e0,postgres:16.14@sha256:33f923b05f64ca54ac4401c01126a6b92afe839a0aa0a52bc5aeb5cc958e5f20,redis:7.2.5@sha256:3aaec283e6e593bde528077d60280ac1589887067a39273348860837c9346d7e}
+      # Evidence-backed Traefik route publication. The worker enrolls only the
+      # explicitly named ingress container into each requested environment
+      # bridge, then requires active-config acknowledgement + a Host probe.
+      MIDNIGHT_WORKER_ROUTE_CONFIG_DIR: ${MIDNIGHT_WORKER_ROUTE_CONFIG_DIR:-/etc/traefik/dynamic}
+      MIDNIGHT_APPS_DOMAIN: ${MIDNIGHT_APPS_DOMAIN:-apps.localhost}
+      MIDNIGHT_WORKER_TRAEFIK_API_URL: ${MIDNIGHT_WORKER_TRAEFIK_API_URL:-http://traefik:8080}
+      MIDNIGHT_WORKER_INGRESS_PROBE_URL: ${MIDNIGHT_WORKER_INGRESS_PROBE_URL:-http://traefik:80}
+      MIDNIGHT_WORKER_INGRESS_CONTAINER: ${MIDNIGHT_WORKER_INGRESS_CONTAINER:-midnight-traefik}
+      # Compatibility-only fixed-host defaults; deploy/domain intent owns
+      # hostnames in the durable workflow.
+      MIDNIGHT_WORKER_ROUTE_PUBLIC_HOST: ${MIDNIGHT_WORKER_ROUTE_PUBLIC_HOST:-}
+      MIDNIGHT_WORKER_ROUTE_PUBLIC_PATH: ${MIDNIGHT_WORKER_ROUTE_PUBLIC_PATH:-/}
+      MIDNIGHT_WORKER_ROUTE_PUBLIC_TLS: ${MIDNIGHT_WORKER_ROUTE_PUBLIC_TLS:-false}
+      MIDNIGHT_WORKER_ROUTE_CERT_RESOLVER: ${MIDNIGHT_WORKER_ROUTE_CERT_RESOLVER:-}
+      MIDNIGHT_WORKER_ROUTE_TARGET_PORT: ${MIDNIGHT_WORKER_ROUTE_TARGET_PORT:-8080}
+      # The privileged deploy worker owns executable L4 forwarding because it
+      # can narrowly join each requested environment bridge. API never joins
+      # workload networks. Docker host publishing exposes this bounded range.
+      MIDNIGHT_TCP_PROXY_BIND_HOST: ${MIDNIGHT_TCP_PROXY_BIND_HOST:-0.0.0.0}
+      MIDNIGHT_TCP_PROXY_CONTAINER: ${MIDNIGHT_TCP_PROXY_CONTAINER:-midnight-deploy-worker}
+      MIDNIGHT_TCP_PROXY_CONTROLLER_ID: ${MIDNIGHT_TCP_PROXY_CONTROLLER_ID:-midnight-deploy-worker}
+      MIDNIGHT_BACKUP_DESTINATION_URI: file:///var/lib/midnight/backups
+      MIDNIGHT_BACKUP_PASSPHRASE_FILE: /run/midnight-secrets/backup.key
+    volumes:
+      - type: bind
+        source: .
+        target: /workspace
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+      - midnight-go-mod-cache:/go/pkg/mod
+      - midnight-go-build-cache:/root/.cache/go-build
+      - midnight-control-secrets:/run/midnight-secrets:ro
+      - midnight-backup-data:/var/lib/midnight/backups
+      - type: bind
+        source: ${MIDNIGHT_TRAEFIK_DYNAMIC:-.midnight/local/traefik/dynamic}
+        target: /etc/traefik/dynamic
+    ports:
+      - 127.0.0.1:${MIDNIGHT_TCP_PROXY_PORT_START:-20000}-${MIDNIGHT_TCP_PROXY_PORT_END:-20099}:${MIDNIGHT_TCP_PROXY_PORT_START:-20000}-${MIDNIGHT_TCP_PROXY_PORT_END:-20099}
+    networks:
+      - midnight-control
+      - midnight-ingress
+
+  build-worker:
+    image: midnight-build-worker:local
+    build:
+      context: .
+      dockerfile: deploy/oci/build-worker/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      api:
+        condition: service_healthy
+      secrets-init:
+        condition: service_completed_successfully
+      local-source-init:
+        condition: service_completed_successfully
+      registry:
+        condition: service_started
+      buildkit:
+        condition: service_started
+    environment:
+      MIDNIGHT_DB_DSN: *database-url
+      MIDNIGHT_DATABASE_URL: *database-url
+      MIDNIGHT_BUILDKIT_WORKER_ID: ${MIDNIGHT_BUILDKIT_WORKER_ID:-midnight-build-worker-local}
+      # buildctl reaches the buildkit daemon over TCP.
+      BUILDKIT_HOST: ${MIDNIGHT_BUILDKIT_HOST:-tcp://buildkit:1234}
+      MIDNIGHT_REGISTRY_ENDPOINT: ${MIDNIGHT_REGISTRY_ENDPOINT:-registry:5000}
+      MIDNIGHT_REGISTRY_INSECURE: ${MIDNIGHT_REGISTRY_INSECURE:-true}
+      MIDNIGHT_BUILDKIT_OUTPUT_ROOT: /var/lib/midnight/build
+      MIDNIGHT_BUILDKIT_CHECKOUT_ROOT: /var/lib/midnight/build/checkout
+      MIDNIGHT_UP_EXTRACTION_ROOT: /var/lib/midnight/uploads
+      MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_QUOTA_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_QUOTA_BYTES:-5368709120}
+      MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_BYTES:-209715200}
+      MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_COUNT: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_COUNT:-4}
+      MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_BYTES:-1073741824}
+      MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_COUNT: ${MIDNIGHT_SOURCE_ARTIFACT_GLOBAL_INFLIGHT_COUNT:-32}
+      MIDNIGHT_SOURCE_ARTIFACT_UPLOAD_LEASE: ${MIDNIGHT_SOURCE_ARTIFACT_UPLOAD_LEASE:-10m}
+      MIDNIGHT_SOURCE_ARTIFACT_ORPHAN_CHARGE_RETENTION: ${MIDNIGHT_SOURCE_ARTIFACT_ORPHAN_CHARGE_RETENTION:-26h}
+      MIDNIGHT_BUILDKIT_CACHE_ROOT: /var/lib/midnight/buildkit/cache
+      MIDNIGHT_BUILDKIT_POLL_INTERVAL: ${MIDNIGHT_BUILDKIT_POLL_INTERVAL:-1s}
+      MIDNIGHT_BUILDKIT_LEASE_TTL: ${MIDNIGHT_BUILDKIT_LEASE_TTL:-10m}
+      MIDNIGHT_KEK_PATH: /run/midnight-secrets/kek
+      MIDNIGHT_BUILDCTL: /usr/local/bin/buildctl
+      MIDNIGHT_RAILPACK_BIN: /usr/local/bin/railpack
+      MIDNIGHT_RAILPACK_FRONTEND: ${MIDNIGHT_RAILPACK_FRONTEND:-ghcr.io/railwayapp/railpack-frontend:v0.23.0@sha256:ba4c430961d9ee3215c64807727a4b11e2198daac31250e9db9eaf9cee4624d6}
+    volumes:
+      - midnight-build-workspaces:/var/lib/midnight/build
+      - midnight-buildctl-cache:/var/lib/midnight/buildkit/cache
+      - midnight-up-uploads:/var/lib/midnight/uploads
+      - midnight-control-secrets:/run/midnight-secrets:ro
+    networks:
+      - midnight-control
+
+  # github-status-worker: DISABLED. The cmd/midnight-github-status-worker binary
+  # exists, but the commit-status feature is dormant until its github_commit_statuses
+  # table + deploy enqueue hooks land (see docs/midnightlight-consolidation.md). It is
+  # left out of the default stack for now; enable it under the github-status profile
+  # once that wiring is in place, e.g.:
+  #
+  # github-status-worker:
+  #   image: *go-image
+  #   profiles: [github-status]
+  #   working_dir: /workspace
+  #   depends_on:
+  #     api:
+  #       condition: service_healthy
+  #   command: [/bin/sh, -ec, exec go run ./cmd/midnight-github-status-worker]
+  #   environment:
+  #     MIDNIGHT_DB_DSN: *database-url
+  #     MIDNIGHT_GITHUB_APP_ID: ${MIDNIGHT_GITHUB_APP_ID:-}
+  #     MIDNIGHT_GITHUB_PRIVATE_KEY_PATH: ${MIDNIGHT_GITHUB_PRIVATE_KEY_PATH:-}
+  #     MIDNIGHT_GITHUB_API_BASE_URL: ${MIDNIGHT_GITHUB_API_BASE_URL:-}
+  #   volumes: *go-volumes
+  #   networks: [midnight-control]
+
+  dashboard:
+    image: node:22-bookworm
+    profiles:
+      - dashboard
+    restart: unless-stopped
+    working_dir: /workspace/web-next
+    command:
+      - /bin/sh
+      - -ec
+      - npm ci && exec npm run dev -- --host 0.0.0.0 --port 5173
+    environment:
+      MIDNIGHT_API_URL: ${MIDNIGHT_API_URL:-http://localhost:8080}
+    ports:
+      - 127.0.0.1:${MIDNIGHT_DASHBOARD_PORT:-15173}:5173
+    volumes:
+      - type: bind
+        source: ./web-next
+        target: /workspace/web-next
+      - midnight-web-node-modules:/workspace/web-next/node_modules
+    networks:
+      - midnight-control
+
+volumes:
+  midnight-postgres-data:
+  midnight-registry-data:
+  midnight-buildkit-cache:
+  midnight-buildctl-cache:
+  midnight-build-workspaces:
+  midnight-up-uploads:
+  midnight-control-secrets:
+  midnight-go-mod-cache:
+  midnight-go-build-cache:
+  midnight-api-go-mod-cache:
+  midnight-api-go-build-cache:
+  midnight-web-node-modules:
+  midnight-traefik-logs:
+  midnight-backup-data:
+
+networks:
+  midnight-control:
+    name: midnight-control
+  midnight-ingress:
+    name: midnight-ingress

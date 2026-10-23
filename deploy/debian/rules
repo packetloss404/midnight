@@ -1,0 +1,142 @@
+#!/usr/bin/make -f
+# debian/rules — build manifest for the `midnight` source package.
+#
+# We use debhelper compat 13. Phase 1 ships nine Go binaries plus the
+# systemd unit files, the daemon.json baseline, the apparmor profile,
+# the logrotate / journald drop-ins, and the runbook tree under
+# /usr/share/midnight/runbooks/.
+
+export DH_VERBOSE = 1
+export DEB_BUILD_MAINT_OPTIONS = hardening=+all
+GO := $(shell if command -v go >/dev/null 2>&1; then command -v go; elif [ -x /usr/local/bin/go ]; then echo /usr/local/bin/go; elif [ -x /usr/local/go/bin/go ]; then echo /usr/local/go/bin/go; else echo go; fi)
+include /usr/share/dpkg/pkg-info.mk
+
+# Go binaries use SemVer-compatible upstream versions while Debian represents
+# prereleases with "~". The Debian revision (for example the "6" in
+# 0.1.0~alpha-6) is a package rebuild number, not part of the product version,
+# so every alpha-6 package binary still reports 0.1.0-alpha.
+MIDNIGHT_VERSION ?= $(subst ~,-,$(DEB_VERSION_UPSTREAM))
+# package-deb injects these values explicitly after verifying a clean commit.
+# Keep deterministic git fallbacks for direct debian/rules builds, and fail
+# closed below when neither the source checkout nor an explicit value exists.
+MIDNIGHT_COMMIT ?= $(shell git rev-parse HEAD 2>/dev/null)
+MIDNIGHT_DATE ?= $(shell git show -s --format=%cI HEAD 2>/dev/null)
+MIDNIGHT_VERSION_PACKAGE := github.com/midnight/midnight/internal/version
+MIDNIGHT_GO_LDFLAGS := -X $(MIDNIGHT_VERSION_PACKAGE).Version=$(MIDNIGHT_VERSION) -X $(MIDNIGHT_VERSION_PACKAGE).Commit=$(MIDNIGHT_COMMIT) -X $(MIDNIGHT_VERSION_PACKAGE).Date=$(MIDNIGHT_DATE)
+MIDNIGHT_GO_BUILD_FLAGS := -trimpath -buildvcs=true
+
+ifeq ($(strip $(MIDNIGHT_COMMIT)),)
+$(error MIDNIGHT_COMMIT is empty; build from a git checkout or inject the full source commit)
+endif
+ifeq ($(strip $(MIDNIGHT_DATE)),)
+$(error MIDNIGHT_DATE is empty; build from a git checkout or inject the source commit date)
+endif
+
+%:
+	dh $@
+
+override_dh_auto_build:
+	cd web-next && npm ci && npm run build
+	test -f web-next/dist/index.html
+	# Stage the console for go:embed so the packaged midnight-server carries
+	# its own UI (internal/api/webui_embed.go). The directory is git-ignored;
+	# clear it first so a stale local copy cannot leak into the package.
+	find internal/api/webdist -mindepth 1 -maxdepth 1 ! -name .gitignore -exec rm -rf -- {} +
+	cp -R web-next/dist/. internal/api/webdist/
+	test -f internal/api/webdist/index.html
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight        ./cmd/midnight
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-doctor ./cmd/midnight-doctor
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-server ./cmd/midnight-server
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-worker ./cmd/midnight-worker
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-agent  ./cmd/midnight-agent
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-buildkit ./cmd/midnight-buildkit
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-registry ./cmd/midnight-registry
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-recovery ./cmd/midnight-recovery
+	$(GO) build $(MIDNIGHT_GO_BUILD_FLAGS) \
+		-ldflags "$(MIDNIGHT_GO_LDFLAGS)" \
+		-o build/midnight-github-status-worker ./cmd/midnight-github-status-worker
+
+override_dh_auto_test:
+ifneq (,$(filter nocheck,$(DEB_BUILD_OPTIONS)))
+	@echo "DEB_BUILD_OPTIONS=nocheck set; skipping package-time go test"
+else
+	$(GO) test ./...
+endif
+
+override_dh_auto_install:
+	install -d $(CURDIR)/debian/midnight/usr/bin
+	install -m 0755 build/midnight             $(CURDIR)/debian/midnight/usr/bin/midnight
+	install -m 0755 build/midnight-doctor      $(CURDIR)/debian/midnight/usr/bin/midnight-doctor
+	install -m 0755 build/midnight-server      $(CURDIR)/debian/midnight/usr/bin/midnight-server
+	install -m 0755 build/midnight-worker      $(CURDIR)/debian/midnight/usr/bin/midnight-worker
+	install -m 0755 build/midnight-agent       $(CURDIR)/debian/midnight/usr/bin/midnight-agent
+	install -m 0755 build/midnight-buildkit    $(CURDIR)/debian/midnight/usr/bin/midnight-buildkit
+	install -m 0755 build/midnight-registry    $(CURDIR)/debian/midnight/usr/bin/midnight-registry
+	install -m 0755 build/midnight-recovery    $(CURDIR)/debian/midnight/usr/bin/midnight-recovery
+	install -m 0755 build/midnight-github-status-worker $(CURDIR)/debian/midnight/usr/bin/midnight-github-status-worker
+	install -d $(CURDIR)/debian/midnight/usr/share/bash-completion/completions
+	build/midnight completion bash > $(CURDIR)/debian/midnight/usr/share/bash-completion/completions/midnight
+	chmod 0644 $(CURDIR)/debian/midnight/usr/share/bash-completion/completions/midnight
+	install -d $(CURDIR)/debian/midnight/usr/share/zsh/vendor-completions
+	build/midnight completion zsh > $(CURDIR)/debian/midnight/usr/share/zsh/vendor-completions/_midnight
+	chmod 0644 $(CURDIR)/debian/midnight/usr/share/zsh/vendor-completions/_midnight
+	install -d $(CURDIR)/debian/midnight/usr/share/fish/vendor_completions.d
+	build/midnight completion fish > $(CURDIR)/debian/midnight/usr/share/fish/vendor_completions.d/midnight.fish
+	chmod 0644 $(CURDIR)/debian/midnight/usr/share/fish/vendor_completions.d/midnight.fish
+	test -s $(CURDIR)/debian/midnight/usr/share/bash-completion/completions/midnight
+	test -s $(CURDIR)/debian/midnight/usr/share/zsh/vendor-completions/_midnight
+	test -s $(CURDIR)/debian/midnight/usr/share/fish/vendor_completions.d/midnight.fish
+	install -d $(CURDIR)/debian/midnight/lib/systemd/system
+	install -m 0644 deploy/systemd/midnight-server.service   $(CURDIR)/debian/midnight/lib/systemd/system/
+	install -m 0644 deploy/systemd/midnight-worker.service   $(CURDIR)/debian/midnight/lib/systemd/system/
+	install -m 0644 deploy/systemd/midnight-agent.service    $(CURDIR)/debian/midnight/lib/systemd/system/
+	install -m 0644 deploy/systemd/midnight-buildkit.service $(CURDIR)/debian/midnight/lib/systemd/system/
+	install -m 0644 deploy/systemd/midnight-buildkit-worker.service $(CURDIR)/debian/midnight/lib/systemd/system/
+	install -m 0644 deploy/systemd/midnight-registry.service $(CURDIR)/debian/midnight/lib/systemd/system/
+	install -m 0644 deploy/systemd/midnight-github-status-worker.service $(CURDIR)/debian/midnight/lib/systemd/system/
+	install -d $(CURDIR)/debian/midnight/usr/share/midnight/daemon-json
+	install -m 0644 deploy/debian/docker-daemon-baseline.json $(CURDIR)/debian/midnight/usr/share/midnight/daemon-json/
+	install -d $(CURDIR)/debian/midnight/usr/share/midnight
+	install -m 0644 deploy/debian/midnight.env $(CURDIR)/debian/midnight/usr/share/midnight/midnight.env.default
+	install -m 0644 deploy/debian/registry.yml $(CURDIR)/debian/midnight/usr/share/midnight/registry.yml.default
+	# midnight-server already embeds this bundle; the copy under /usr/share is
+	# kept so an operator can point MIDNIGHT_WEB_DIST_DIR at a bundle on disk
+	# (see deploy/debian/midnight.env) and so the release verifier can diff the
+	# shipped console against the source build.
+	install -d $(CURDIR)/debian/midnight/usr/share/midnight/web-next
+	cp -R web-next/dist/. $(CURDIR)/debian/midnight/usr/share/midnight/web-next/
+	install -d $(CURDIR)/debian/midnight/etc/logrotate.d
+	install -m 0644 deploy/logrotate/midnight $(CURDIR)/debian/midnight/etc/logrotate.d/midnight
+	install -d $(CURDIR)/debian/midnight/etc/systemd/journald.conf.d
+	install -m 0644 deploy/journald/midnight.conf $(CURDIR)/debian/midnight/etc/systemd/journald.conf.d/midnight.conf
+	install -d $(CURDIR)/debian/midnight/etc/apparmor.d
+	install -m 0644 deploy/apparmor/midnight-default $(CURDIR)/debian/midnight/etc/apparmor.d/midnight-default
+	install -d $(CURDIR)/debian/midnight/usr/share/midnight/runbooks
+	install -m 0644 docs/runbooks/*.md $(CURDIR)/debian/midnight/usr/share/midnight/runbooks/ || true
+
+override_dh_installsystemd:
+	# Service activation is gated by the operator running
+	# `systemctl enable --now midnight-server ...` after `midnight
+	# doctor` reports green. Do NOT auto-enable.
+	dh_installsystemd --no-enable --no-start --no-stop-on-upgrade
+
+override_dh_dwz:
+	@echo "Skipping dh_dwz for Go binaries; Go debug sections are already compressed by the toolchain."
+
+.PHONY: override_dh_auto_build override_dh_auto_test override_dh_auto_install override_dh_installsystemd override_dh_dwz

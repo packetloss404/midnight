@@ -1,0 +1,82 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://deployatmidnight.com/schemas/gate9f-results.schema.json",
+  "title": "Midnight Gate 9F pseudonymous usability results",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["study_id", "product_commit", "environment", "safety", "participants"],
+  "properties": {
+    "study_id": { "type": "string", "minLength": 1 },
+    "product_commit": { "type": "string", "minLength": 7 },
+    "environment": { "type": "string", "minLength": 1 },
+    "safety": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["no_secret_exposure", "no_cross_tenant_access", "no_desired_state_as_observed_runtime"],
+      "properties": {
+        "no_secret_exposure": { "type": "boolean" },
+        "no_cross_tenant_access": { "type": "boolean" },
+        "no_desired_state_as_observed_runtime": { "type": "boolean" }
+      }
+    },
+    "participants": {
+      "type": "array",
+      "minItems": 12,
+      "items": { "$ref": "#/$defs/participant" }
+    }
+  },
+  "$defs": {
+    "participant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "segment", "overall_rating", "railway_familiarity", "new_user_ease", "ux_coherence", "sus_answers", "tasks", "accessibility_findings"],
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "segment": { "enum": ["railway-user", "new-user", "operator", "accessibility"] },
+        "overall_rating": { "type": "number", "minimum": 1, "maximum": 10 },
+        "railway_familiarity": { "type": "number", "minimum": 1, "maximum": 10 },
+        "new_user_ease": { "type": "number", "minimum": 1, "maximum": 10 },
+        "ux_coherence": { "type": "number", "minimum": 1, "maximum": 10 },
+        "sus_answers": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "items": { "type": "integer", "minimum": 1, "maximum": 5 }
+        },
+        "tasks": {
+          "type": "array",
+          "minItems": 10,
+          "maxItems": 10,
+          "items": { "$ref": "#/$defs/task" }
+        },
+        "accessibility_findings": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/accessibilityFinding" }
+        }
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["task_id", "completed_without_help", "duration_seconds", "wrong_turns", "confidence"],
+      "properties": {
+        "task_id": { "type": "integer", "minimum": 1, "maximum": 10 },
+        "completed_without_help": { "type": "boolean" },
+        "duration_seconds": { "type": "integer", "minimum": 0 },
+        "wrong_turns": { "type": "integer", "minimum": 0 },
+        "confidence": { "type": "integer", "minimum": 1, "maximum": 7 },
+        "serving_release_correct": { "type": "boolean" },
+        "apply_prediction_correct": { "type": "boolean" }
+      }
+    },
+    "accessibilityFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "summary"],
+      "properties": {
+        "severity": { "enum": ["none", "minor", "serious", "critical", "blocking"] },
+        "summary": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

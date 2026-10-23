@@ -1,0 +1,18 @@
+// This is a test fixture. The .go.txt extension keeps Go's toolchain from
+// trying to compile it. The deep-registry guard test copies it into a
+// temporary repo as `internal/example/registered.go`.
+package example
+
+// FailureCode is registered in docs/error-codes.md and must pass the guard.
+const FailureCode = "INTERNAL_ERROR"
+
+// CapabilityName matches the SCREAMING_SNAKE_CASE shape but is allowlisted
+// in tools/lint/non_failure_code_literals.txt.
+const CapabilityName = "DAC_OVERRIDE"
+
+// AnnotatedLiteral demonstrates the per-line annotation. // not-a-failure-code
+const AnnotatedLiteral = "WORKER_FOO_RESULT"
+
+// PrecedingAnnotation demonstrates the annotation on the preceding line.
+// not-a-failure-code
+const PrecedingAnnotation = "WORKER_BAR_RESULT"

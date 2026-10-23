@@ -1,0 +1,7 @@
+{
+  "firewall_mode": "none",
+  "mandatory_access_control": "apparmor-enforce",
+  "time_sync_status": "synchronized",
+  "hostname_fqdn": "cgroup-v1.midnight.local",
+  "installed_docker_packages": ["docker-ce", "docker-ce-cli"]
+}

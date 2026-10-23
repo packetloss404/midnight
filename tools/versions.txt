@@ -1,0 +1,9 @@
+go=1.26.9+
+node=20+
+npm=10+
+govulncheck=manual-workflow-v1.3.0
+osv-scanner=manual-workflow-v2.3.3
+actionlint=manual-workflow-v1.7.7
+buildkit=v0.28.1
+railpack=v0.23.0
+railpack-frontend=ghcr.io/railwayapp/railpack-frontend:v0.23.0@sha256:ba4c430961d9ee3215c64807727a4b11e2198daac31250e9db9eaf9cee4624d6

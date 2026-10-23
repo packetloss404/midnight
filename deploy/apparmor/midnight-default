@@ -1,0 +1,12 @@
+#include <tunables/global>
+
+profile midnight-default flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+  #include <abstractions/nameservice>
+
+  /usr/bin/midnight-* r,
+  /etc/midnight/** r,
+  /var/lib/midnight/** rwk,
+  /var/log/midnight/** rw,
+  /run/midnight/** rw,
+}

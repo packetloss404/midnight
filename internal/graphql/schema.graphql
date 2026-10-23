@@ -1,0 +1,660 @@
+# Copyright 2026 Midnight Authors. SPDX-License-Identifier: Apache-2.0.
+#
+# Midnight GraphQL gateway schema (mounted at /graphql/v2).
+#
+# Field names follow familiar Railway resource conventions where useful, but
+# this is an explicit Midnight subset rather than a drop-in Railway endpoint.
+# The Midnight REST API at /api/v1alpha is the canonical source of truth;
+# supported fields delegate to the same service layer. Declared but unwired
+# mutations return typed NOT_IMPLEMENTED capability errors.
+#
+# Pagination uses Relay-style cursor connections (edges{node}+pageInfo).
+# There are intentionally no Subscriptions in v1 -- clients poll, matching
+# Railway's public API. Mutations accept an optional `idempotencyKey`
+# argument that is routed to the same FSM as the REST Idempotency-Key
+# header.
+
+scalar Time
+scalar JSON
+
+# --- Pagination -----------------------------------------------------------
+
+type PageInfo {
+  hasNextPage: Boolean!
+  hasPreviousPage: Boolean!
+  startCursor: String
+  endCursor: String
+}
+
+# --- Enums ----------------------------------------------------------------
+
+enum EnvironmentTier {
+  PROD
+  STAGING
+  PREVIEW
+  DEV
+}
+
+enum VariableScope {
+  PLAIN
+  SECRET
+  SEALED
+}
+
+enum DeploymentStatus {
+  QUEUED
+  BUILDING
+  DEPLOYING
+  SUCCESS
+  FAILED
+  CRASHED
+  CANCELED
+  REMOVED
+  SLEEPING
+}
+
+enum OperationState {
+  QUEUED
+  RUNNING
+  SUCCEEDED
+  FAILED
+  CANCELED
+}
+
+enum VariableValueKind {
+  LITERAL
+  REFERENCE
+}
+
+enum VariableReferenceKind {
+  ServiceVar
+  Shared
+  LocalVar
+  Builtin
+}
+
+enum TemplateEnvKind {
+  LITERAL
+  GENERATED
+  COMPUTED_URL
+}
+
+# --- Core types -----------------------------------------------------------
+
+type Project {
+  id: ID!
+  name: String!
+  description: String
+  createdAt: Time!
+  updatedAt: Time!
+
+  services(first: Int, after: String): ServiceConnection!
+  environments(first: Int, after: String): EnvironmentConnection!
+  volumes(first: Int, after: String): VolumeConnection!
+}
+
+type ProjectEdge {
+  cursor: String!
+  node: Project!
+}
+
+type ProjectConnection {
+  edges: [ProjectEdge!]!
+  pageInfo: PageInfo!
+}
+
+type Environment {
+  id: ID!
+  name: String!
+  projectId: ID!
+  tier: EnvironmentTier
+  isProtected: Boolean!
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type EnvironmentEdge {
+  cursor: String!
+  node: Environment!
+}
+
+type EnvironmentConnection {
+  edges: [EnvironmentEdge!]!
+  pageInfo: PageInfo!
+}
+
+type Service {
+  id: ID!
+  name: String!
+  projectId: ID!
+  createdAt: Time!
+  updatedAt: Time!
+
+  # Railway-compatible compound key: serviceInstance(serviceId, environmentId).
+  serviceInstances(first: Int, after: String): ServiceInstanceConnection!
+
+  deployments(first: Int, after: String, environmentId: ID): DeploymentConnection!
+
+  # github resolves the optional `service.spec.github` link recorded by
+  # the GitHub-App integration. Returns null when no link is set.
+  github: GitHubLink
+}
+
+type ServiceEdge {
+  cursor: String!
+  node: Service!
+}
+
+type ServiceConnection {
+  edges: [ServiceEdge!]!
+  pageInfo: PageInfo!
+}
+
+# ServiceInstance is the Railway-shaped compound resource keyed by
+# (serviceId, environmentId). It is the per-environment configuration of
+# a service, including its latest deployment and variables.
+type ServiceInstance {
+  id: ID!
+  serviceId: ID!
+  environmentId: ID!
+  serviceName: String!
+  environmentName: String
+
+  # Latest deployment in this environment, if any.
+  latestDeployment: Deployment
+
+  # All deployments in this environment.
+  deployments(first: Int, after: String): DeploymentConnection!
+
+  # Variables scoped to this service instance.
+  variables: JSON
+
+  domains: [CustomDomain!]!
+  serviceDomains: [ServiceDomain!]!
+
+  region: String
+  numReplicas: Int
+  startCommand: String
+  buildCommand: String
+  rootDirectory: String
+  source: ServiceSource
+
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+type ServiceInstanceEdge {
+  cursor: String!
+  node: ServiceInstance!
+}
+
+type ServiceInstanceConnection {
+  edges: [ServiceInstanceEdge!]!
+  pageInfo: PageInfo!
+}
+
+type ServiceSource {
+  image: String
+  repo: String
+  branch: String
+}
+
+type Deployment {
+  id: ID!
+  serviceId: ID!
+  environmentId: ID
+  projectId: ID
+
+  status: DeploymentStatus!
+  operationId: ID!
+  operationState: OperationState!
+
+  image: String
+  staticUrl: String
+  meta: JSON
+
+  createdAt: Time!
+  updatedAt: Time!
+
+  # Polling endpoint for log tail. Returns the most recent N event
+  # records in oldest-first order. No subscriptions in v1.
+  logs(limit: Int): [DeploymentLogLine!]!
+}
+
+type DeploymentEdge {
+  cursor: String!
+  node: Deployment!
+}
+
+type DeploymentConnection {
+  edges: [DeploymentEdge!]!
+  pageInfo: PageInfo!
+}
+
+type DeploymentLogLine {
+  timestamp: Time!
+  message: String!
+  severity: String
+}
+
+type Variable {
+  id: ID!
+  name: String!
+  scope: VariableScope!
+  projectId: ID
+  environmentId: ID
+  serviceId: ID
+  workspaceId: ID
+  # Plaintext is never returned for SECRET/SEALED variables; PLAIN
+  # variables return the stored value. The existing contract is
+  # metadata-only -- this field always resolves to null.
+  value: String
+  # valueKind classifies the stored template: LITERAL is a plain string
+  # without any `${{...}}` expression; REFERENCE indicates the template
+  # contains at least one parsed reference expression.
+  valueKind: VariableValueKind!
+  # references lists the parsed reference targets (names only -- never
+  # resolved values) so dashboards can surface the dependency graph
+  # without unsealing the encrypted blob.
+  references: [VariableReference!]!
+  version: Int!
+  lengthBucket: String!
+  lastRotatedAt: Time!
+}
+
+# VariableReference is the redaction-safe shape of one parsed
+# `${{...}}` reference expression attached to a variable's stored
+# template.
+type VariableReference {
+  kind: VariableReferenceKind!
+  service: String
+  name: String!
+}
+
+type Volume {
+  id: ID!
+  name: String!
+  projectId: ID!
+  serviceId: ID
+  environmentId: ID
+  mountPath: String!
+  sizeMb: Int
+  # sizeBytes is the canonical size unit the REST surface persists. The
+  # legacy `sizeMb` field rounds down to the megabyte and is retained
+  # for Railway-compatibility callers.
+  sizeBytes: Int!
+  state: String
+  status: String!
+  createdAt: Time!
+  updatedAt: Time!
+}
+
+# Template is a one-click service-bundle manifest. Mirrors the REST
+# /api/v1alpha/templates surface.
+type Template {
+  slug: String!
+  name: String!
+  version: String!
+  summary: String
+  description: String
+  services: [TemplateService!]!
+}
+
+type TemplateService {
+  slug: String!
+  image: String!
+  env: [TemplateEnv!]!
+  volume: TemplateVolume
+}
+
+type TemplateEnv {
+  name: String!
+  kind: TemplateEnvKind!
+  value: String
+  generatedKind: String
+  length: Int
+  template: String
+  secret: Boolean
+}
+
+type TemplateVolume {
+  mountPath: String!
+  sizeBytes: Int!
+}
+
+# GitHubLink is the redaction-safe shape of one
+# `service.spec.github` record. Mirrors the REST GET response.
+type GitHubLink {
+  installationId: Int!
+  repo: String!
+  branch: String!
+  watchPaths: [String!]!
+  rootDirectory: String
+  configPath: String
+  cloneUrl: String
+  waitForCi: Boolean
+  requiredChecks: [String!]!
+}
+
+type GitHubInstallation {
+  id: Int!
+  account: String!
+}
+
+type GitHubRepo {
+  fullName: String!
+  private: Boolean!
+}
+
+type VolumeEdge {
+  cursor: String!
+  node: Volume!
+}
+
+type VolumeConnection {
+  edges: [VolumeEdge!]!
+  pageInfo: PageInfo!
+}
+
+type CustomDomain {
+  id: ID!
+  domain: String!
+  serviceId: ID!
+  environmentId: ID
+  status: String
+  createdAt: Time!
+}
+
+type ServiceDomain {
+  id: ID!
+  domain: String!
+  serviceId: ID!
+  environmentId: ID
+  suffix: String
+  createdAt: Time!
+}
+
+# --- Input objects --------------------------------------------------------
+
+input ProjectCreateInput {
+  name: String!
+  description: String
+}
+
+input ServiceCreateInput {
+  projectId: ID!
+  name: String!
+  source: ServiceSourceInput
+}
+
+input ServiceSourceInput {
+  image: String
+  repo: String
+  branch: String
+}
+
+input ServiceInstanceUpdateInput {
+  serviceId: ID!
+  environmentId: ID!
+  startCommand: String
+  buildCommand: String
+  rootDirectory: String
+  numReplicas: Int
+  region: String
+  source: ServiceSourceInput
+}
+
+input ServiceInstanceDeployInput {
+  serviceId: ID!
+  environmentId: ID!
+  image: String
+  commit: String
+}
+
+input VariableUpsertInput {
+  projectId: ID
+  environmentId: ID
+  serviceId: ID
+  workspaceId: ID
+  name: String!
+  value: String!
+  scope: VariableScope
+}
+
+input VariableCollectionUpsertInput {
+  projectId: ID
+  environmentId: ID
+  serviceId: ID
+  workspaceId: ID
+  scope: VariableScope
+  # JSON map of name -> value. Supports Railway's
+  # `${{Service.VAR}}` reference syntax in values.
+  variables: JSON!
+}
+
+input EnvironmentCreateInput {
+  projectId: ID!
+  name: String!
+  tier: EnvironmentTier
+}
+
+input CustomDomainCreateInput {
+  serviceId: ID!
+  environmentId: ID
+  domain: String!
+}
+
+input DeploymentListInput {
+  projectId: ID
+  serviceId: ID
+  environmentId: ID
+  status: DeploymentStatus
+}
+
+input TemplateDeployInput {
+  projectId: ID!
+  environmentId: ID!
+  slug: String!
+  name: String
+  idempotencyKey: String
+}
+
+input VolumeCreateInput {
+  serviceId: ID
+  environmentId: ID
+  name: String!
+  sizeBytes: Int!
+  mountPath: String!
+  idempotencyKey: String
+}
+
+input GitHubLinkInput {
+  serviceId: ID!
+  installationId: Int!
+  repo: String!
+  branch: String!
+  watchPaths: [String!]
+  rootDirectory: String
+  configPath: String
+  cloneUrl: String
+  waitForCi: Boolean
+  requiredChecks: [String!]
+}
+
+# TemplateDeployPayload bundles the operation seeded by the materializer
+# with the freshly created service rows the resolver projects.
+type TemplateDeployPayload {
+  operationId: ID!
+  createdServices: [Service!]!
+  note: String
+}
+
+# VolumePayload bundles a freshly created Volume with the operation id
+# (when the create path went through an idempotency reservation).
+type VolumePayload {
+  volume: Volume!
+  operationId: ID
+}
+
+# --- Queries --------------------------------------------------------------
+
+type Query {
+  # Reachable from any token; returns null if not found or not visible.
+  project(id: ID!): Project
+  projects(workspaceId: ID, first: Int, after: String): ProjectConnection!
+
+  service(id: ID!): Service
+  serviceInstance(serviceId: ID!, environmentId: ID!): ServiceInstance
+
+  deployment(id: ID!): Deployment
+  deployments(input: DeploymentListInput, first: Int, after: String): DeploymentConnection!
+
+  variables(projectId: ID, environmentId: ID, serviceId: ID): [Variable!]!
+
+  environment(id: ID!): Environment
+  environments(projectId: ID!): [Environment!]!
+
+  volume(id: ID!): Volume
+  volumes(serviceId: ID, projectId: ID, environmentId: ID): [Volume!]!
+
+  templates: [Template!]!
+  template(slug: String!): Template
+
+  githubInstallations: [GitHubInstallation!]!
+  githubInstallationRepos(installationId: Int!): [GitHubRepo!]!
+
+  # Service health probe; mirrors Railway's `me`-style probe but auth-token
+  # agnostic. Returns the API version.
+  serverInfo: ServerInfo!
+}
+
+type ServerInfo {
+  apiVersion: String!
+  midnightVersion: String!
+  graphqlSchemaSource: String!
+}
+
+# --- Mutations ------------------------------------------------------------
+
+type Mutation {
+  projectCreate(input: ProjectCreateInput!, idempotencyKey: String): Project!
+  serviceCreate(input: ServiceCreateInput!, idempotencyKey: String): Service!
+
+  serviceInstanceUpdate(input: ServiceInstanceUpdateInput!, idempotencyKey: String): ServiceInstance!
+  serviceInstanceDeployV2(input: ServiceInstanceDeployInput!, idempotencyKey: String): Deployment!
+
+  deploymentRedeploy(id: ID!, idempotencyKey: String): Deployment!
+  deploymentRollback(id: ID!, idempotencyKey: String): Deployment!
+  deploymentStop(id: ID!, idempotencyKey: String): Deployment!
+  deploymentRestart(id: ID!, idempotencyKey: String): Deployment!
+  deploymentRemove(id: ID!, idempotencyKey: String): Deployment!
+
+  variableUpsert(input: VariableUpsertInput!, idempotencyKey: String): Variable!
+  variableCollectionUpsert(input: VariableCollectionUpsertInput!, idempotencyKey: String): [Variable!]!
+
+  environmentCreate(input: EnvironmentCreateInput!, idempotencyKey: String): Environment!
+  customDomainCreate(input: CustomDomainCreateInput!, idempotencyKey: String): CustomDomain!
+
+  templateDeploy(input: TemplateDeployInput!): TemplateDeployPayload!
+
+  volumeCreate(input: VolumeCreateInput!): VolumePayload!
+  volumeResize(id: ID!, sizeBytes: Int!): Volume!
+  volumeDelete(id: ID!): Boolean!
+
+  serviceGithubLink(input: GitHubLinkInput!): Service!
+  serviceGithubUnlink(serviceId: ID!): Service!
+}
+
+# ---------------------------------------------------------------------
+# Agent chat conversations (ADR-0024)
+# ---------------------------------------------------------------------
+
+scalar DateTime
+
+enum MessageRole { USER ASSISTANT TOOL SYSTEM }
+enum ContentBlockType { TEXT TOOL_USE TOOL_RESULT }
+
+type MessageContent {
+  type: ContentBlockType!
+  text: String
+  toolUseId: String
+  toolName: String
+  toolInput: JSON
+  toolOutput: JSON
+  toolError: String
+}
+
+type Usage {
+  inputTokens: Int!
+  outputTokens: Int!
+  cacheCreationTokens: Int!
+  cacheReadTokens: Int!
+}
+
+type Message {
+  id: ID!
+  conversationId: ID!
+  seq: Int!
+  role: MessageRole!
+  content: [MessageContent!]!
+  usage: Usage
+  createdAt: DateTime!
+}
+
+type Conversation {
+  id: ID!
+  projectId: ID
+  serviceId: ID
+  actorId: String
+  title: String
+  model: String!
+  createdAt: DateTime!
+  updatedAt: DateTime!
+  metadata: JSON
+  messages(limit: Int = 100, cursor: String): MessageConnection!
+}
+
+type MessageConnection { nodes: [Message!]!  nextCursor: String }
+type ConversationConnection { nodes: [Conversation!]!  nextCursor: String }
+
+input ConversationListInput {
+  projectId: ID
+  serviceId: ID
+  actorId: String
+  limit: Int = 50
+  cursor: String
+}
+
+input ConversationStartInput {
+  title: String
+  projectId: ID
+  serviceId: ID
+  model: String
+  metadata: JSON
+  systemPreamble: String
+}
+
+input ConversationSendInput {
+  conversationId: ID!
+  content: String!
+  allowedTools: [String!]
+  allowMutations: Boolean = false
+}
+
+type ConversationSendResult {
+  userMessage: Message!
+  assistantMessage: Message!
+  stopReason: String
+  streamUrl: String!
+}
+
+extend type Query {
+  conversation(id: ID!): Conversation
+  conversations(input: ConversationListInput): ConversationConnection!
+}
+
+extend type Mutation {
+  conversationStart(input: ConversationStartInput!): Conversation!
+  conversationSend(input: ConversationSendInput!): ConversationSendResult!
+  conversationDelete(id: ID!): Boolean!
+}

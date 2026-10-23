@@ -1,0 +1,93 @@
+#!/bin/sh
+# One-time, source-tree upgrade bridge for midnight 0.1.0~alpha-2.
+#
+# Alpha-2's installed prerm cannot create the active-unit snapshot consumed by
+# newer postinst scripts. This wrapper captures that exact state and then
+# immediately replaces itself with dpkg. Do not copy the snapshot by hand and
+# do not infer activity from unit enablement.
+
+set -eu
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+ALPHA2_VERSION=0.1.0~alpha-2
+UPGRADE_STATE_DIR=/run/midnight-package-upgrade
+UPGRADE_ACTIVE_UNITS="$UPGRADE_STATE_DIR/active-units"
+UPGRADE_LOCK="$UPGRADE_STATE_DIR/alpha2-bridge.lock"
+MIDNIGHT_UNIT_FILES="midnight-server.service midnight-worker.service midnight-agent.service midnight-buildkit-worker.service midnight-buildkit.service midnight-registry.service"
+
+fail() {
+    echo "midnight alpha-2 upgrade bridge: $*" >&2
+    exit 1
+}
+
+validate_snapshot() {
+    [ -f "$UPGRADE_ACTIVE_UNITS" ] && [ ! -L "$UPGRADE_ACTIVE_UNITS" ] ||
+        fail "unsafe active-unit snapshot"
+    [ "$(stat -c %u -- "$UPGRADE_ACTIVE_UNITS")" = 0 ] ||
+        fail "active-unit snapshot is not owned by root"
+    [ "$(stat -c %a -- "$UPGRADE_ACTIVE_UNITS")" = 600 ] ||
+        fail "active-unit snapshot mode is not 0600"
+    while IFS= read -r saved_unit; do
+        case " $MIDNIGHT_UNIT_FILES " in
+            *" $saved_unit "*) ;;
+            *) fail "active-unit snapshot contains an unknown unit" ;;
+        esac
+    done <"$UPGRADE_ACTIVE_UNITS"
+}
+
+[ "$(id -u)" = 0 ] || fail "must run as root"
+[ "$#" -eq 1 ] || fail "usage: $0 /absolute/path/to/midnight.deb"
+
+package=$1
+[ -f "$package" ] && [ ! -L "$package" ] || fail "package must be a regular, non-symlink file"
+package="$(realpath -e -- "$package")" || fail "could not resolve package path"
+[ "$(dpkg-deb -f "$package" Package)" = midnight ] || fail "package is not midnight"
+target_version="$(dpkg-deb -f "$package" Version)" || fail "could not read package version"
+installed_version="$(dpkg-query -W -f='${Version}' midnight 2>/dev/null)" ||
+    fail "midnight is not installed"
+[ "$installed_version" = "$ALPHA2_VERSION" ] ||
+    fail "installed version is $installed_version, expected exactly $ALPHA2_VERSION"
+dpkg --compare-versions "$target_version" gt "$installed_version" ||
+    fail "target version $target_version is not newer than $installed_version"
+
+if [ -e "$UPGRADE_STATE_DIR" ] && { [ ! -d "$UPGRADE_STATE_DIR" ] || [ -L "$UPGRADE_STATE_DIR" ]; }; then
+    fail "unsafe package-upgrade state path $UPGRADE_STATE_DIR"
+fi
+install -d -m 0700 -o root -g root "$UPGRADE_STATE_DIR"
+[ "$(stat -c %u -- "$UPGRADE_STATE_DIR")" = 0 ] || fail "package-upgrade state directory is not owned by root"
+[ "$(stat -c %a -- "$UPGRADE_STATE_DIR")" = 700 ] || fail "package-upgrade state directory mode is not 0700"
+
+umask 077
+if [ -L "$UPGRADE_LOCK" ]; then
+    fail "unsafe bridge lock path"
+fi
+: >>"$UPGRADE_LOCK"
+chmod 0600 "$UPGRADE_LOCK"
+exec 9<>"$UPGRADE_LOCK"
+flock -x 9
+
+if [ -e "$UPGRADE_ACTIVE_UNITS" ]; then
+    # A failed configure/restart retains the original active set. Never replace
+    # it with the stopped state observed by a retry.
+    validate_snapshot
+else
+    active_tmp="$UPGRADE_ACTIVE_UNITS.tmp.$$"
+    trap 'rm -f "$active_tmp"' EXIT HUP INT TERM
+    : >"$active_tmp"
+    for unit in $MIDNIGHT_UNIT_FILES; do
+        if systemctl is-active --quiet "$unit"; then
+            printf '%s\n' "$unit" >>"$active_tmp"
+        fi
+    done
+    chown root:root "$active_tmp"
+    chmod 0600 "$active_tmp"
+    mv -f "$active_tmp" "$UPGRADE_ACTIVE_UNITS"
+    trap - EXIT HUP INT TERM
+fi
+
+# No operator-visible gap is permitted between the snapshot and dpkg. The new
+# postinst sees this file, stops all fixed units before migration, and restarts
+# only the saved active set after daemon-reload, migration, and Doctor succeed.
+exec dpkg --install -- "$package"

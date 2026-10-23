@@ -1,0 +1,10 @@
+# Generated-code configuration for the public v1alpha Go models.
+# The generator version is pinned in scripts/generate-midnightctl.sh.
+package: midnightctl
+generate:
+  models: true
+output: pkg/midnightctl/types.gen.go
+output-options:
+  # This package is the migration target for existing manual CLI DTOs, so keep
+  # every canonical component even before a generated endpoint references it.
+  skip-prune: true

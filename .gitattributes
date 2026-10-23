@@ -1,0 +1,32 @@
+# Normalize line endings on commit so CRLF on Windows checkouts does not
+# pollute `gofmt -l`, golden-file tests, or diffs.
+* text=auto eol=lf
+
+# Source files always LF.
+*.go            text eol=lf
+*.md            text eol=lf
+*.yaml          text eol=lf
+*.yml           text eol=lf
+*.json          text eol=lf
+*.toml          text eol=lf
+*.sh            text eol=lf
+*.sql           text eol=lf
+*.proto         text eol=lf
+*.tf            text eol=lf
+Makefile        text eol=lf
+CODEOWNERS      text eol=lf
+
+# Binary file types — never run text munging on these.
+*.png           binary
+*.jpg           binary
+*.jpeg          binary
+*.gif           binary
+*.ico           binary
+*.svg           text eol=lf
+*.zip           binary
+*.tar.gz        binary
+*.gz            binary
+*.exe           binary
+*.dll           binary
+*.so            binary
+*.dylib         binary

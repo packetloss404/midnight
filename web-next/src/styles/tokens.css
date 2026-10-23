@@ -1,0 +1,185 @@
+/* Midnight Console — design tokens
+   ───────────────────────────────────────
+   OKLch palette shared across the dashboard. */
+
+:root {
+  color-scheme: dark;
+
+  --bg: oklch(0.16 0.012 250);
+  --bg-2: oklch(0.185 0.012 250);
+  --surface: oklch(0.205 0.012 250);
+  --surface-2: oklch(0.235 0.013 250);
+  --surface-3: oklch(0.265 0.013 250);
+  --surface-raised: oklch(0.218 0.012 250);
+  --line: oklch(0.28 0.014 250);
+  --line-soft: oklch(0.255 0.012 250);
+  --line-strong: oklch(0.34 0.014 250);
+  --text: oklch(0.96 0.005 250);
+  --muted: oklch(0.74 0.012 250);
+  --subtle: oklch(0.66 0.012 250);
+
+  /* Brand is Midnight identity, not a generic success indicator. */
+  --brand: oklch(0.73 0.16 245);
+  --brand-soft: oklch(0.73 0.16 245 / 0.14);
+  --brand-ink: oklch(0.18 0.04 245);
+  --accent: oklch(0.78 0.18 145);
+  --accent-soft: oklch(0.78 0.18 145 / 0.14);
+  --accent-ink: oklch(0.18 0.04 145);
+
+  /* Interaction and selection are independent semantic channels. */
+  --interaction: var(--accent);
+  --interaction-soft: var(--accent-soft);
+  --selection: var(--brand);
+  --selection-soft: var(--brand-soft);
+  --warn: oklch(0.78 0.16 75);
+  --warn-soft: oklch(0.78 0.16 75 / 0.14);
+  --info: oklch(0.73 0.16 245);
+  --info-soft: oklch(0.73 0.16 245 / 0.14);
+  --branch: oklch(0.70 0.20 350);
+  --branch-soft: oklch(0.70 0.20 350 / 0.14);
+  --danger: oklch(0.65 0.22 25);
+  --danger-soft: oklch(0.65 0.22 25 / 0.14);
+
+  --status-success: var(--accent);
+  --status-info: var(--info);
+  --status-warning: var(--warn);
+  --status-error: var(--danger);
+  --status-error-soft: var(--danger-soft);
+  --status-success-soft: var(--accent-soft);
+  --status-info-soft: var(--info-soft);
+  --status-warning-soft: var(--warn-soft);
+  --status-danger: var(--danger);
+  --status-danger-soft: var(--danger-soft);
+  --status-unknown: var(--muted);
+  --status-unknown-soft: oklch(0.74 0.012 250 / 0.14);
+  --status-neutral: var(--muted);
+  --status-neutral-soft: oklch(0.74 0.012 250 / 0.14);
+
+  /* Reviewable desired-state changes use their own purple channel. */
+  --change: oklch(0.70 0.20 350);
+  --change-soft: oklch(0.70 0.20 350 / 0.14);
+
+  /* ── Chart / usage tokens ───────────────────────────────
+     Categorical series for metrics + a dedicated `--staged`
+     (purple, reusing --branch) for staged/modified diffs. */
+  --chart-1: var(--accent);
+  --chart-2: var(--info);
+  --chart-3: var(--branch);
+  --chart-4: var(--warn);
+  --chart-grid: var(--line-soft);
+  --staged: var(--change);
+  --staged-soft: var(--change-soft);
+
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 4px var(--interaction);
+
+  /* ── Global layout rails ────────────────────────────────
+     Left icon rail + top bar. Content is full-width beside
+     the rail (no permanent right-rail padding anymore). */
+  --rail-width: 56px;
+  --sidebar-wide: 212px;
+
+  /* ── Agent panel tokens ─────────────────────────────────
+     Added for the right-rail AI chat dock. */
+  --agent-dock-width: 440px;
+  --agent-dock-collapsed-width: 48px;
+  /* The *current* right-rail width — kept in sync with the dock's
+     collapsed flag by AppShell. Used for the main column's
+     padding-right so the canvas never slides under the dock. */
+  --agent-dock-current-width: var(--agent-dock-width);
+
+  /* ── Top nav + main column gutters ──────────────────────
+     Shared by AppShell, TopNav, and ProjectCanvas so the
+     canvas can size to `100vh - top-nav - gutter`. */
+  --top-nav-height: 48px;
+  --project-nav-height: 42px;
+  --main-gutter: 24px;
+  --main-max-width: 1400px;
+  --agent-bubble-user: oklch(0.78 0.18 145 / 0.18);
+  --agent-bubble-user-ink: oklch(0.96 0.04 145);
+  --agent-bubble-assistant: oklch(0.235 0.013 250);
+  --agent-bubble-assistant-ink: var(--text);
+  --agent-bubble-tool: oklch(0.265 0.013 250);
+  --agent-tool-chip: oklch(0.295 0.014 250);
+  --agent-tool-chip-hover: oklch(0.325 0.014 250);
+  --agent-cursor: oklch(0.78 0.18 145);
+  --agent-unread-dot: oklch(0.78 0.18 145);
+
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+
+  --r-sm: 6px;
+  --r: 10px;
+  --r-lg: 14px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-lg: 0 24px 64px rgba(0, 0, 0, 0.5), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+@keyframes agent-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.9); }
+  50% { opacity: 1; transform: scale(1.0); }
+}
+
+@media (forced-colors: active) {
+  :root {
+    --bg: Canvas;
+    --bg-2: Canvas;
+    --surface: Canvas;
+    --surface-2: Canvas;
+    --surface-3: Canvas;
+    --surface-raised: Canvas;
+    --line: CanvasText;
+    --line-soft: CanvasText;
+    --line-strong: CanvasText;
+    --text: CanvasText;
+    --muted: CanvasText;
+    --subtle: CanvasText;
+    --brand: LinkText;
+    --brand-soft: Canvas;
+    --accent: Highlight;
+    --accent-soft: Canvas;
+    --accent-ink: HighlightText;
+    --interaction: Highlight;
+    --selection: Highlight;
+    --selection-soft: Canvas;
+    --warn: CanvasText;
+    --warn-soft: Canvas;
+    --danger: CanvasText;
+    --danger-soft: Canvas;
+    --change: LinkText;
+    --change-soft: Canvas;
+  }
+}
+
+.agent-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--agent-cursor);
+  margin-left: 4px;
+  vertical-align: baseline;
+  animation: agent-pulse 1s ease-in-out infinite;
+}

@@ -1,0 +1,44 @@
+name: release-check
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  RELEASE_EVIDENCE_DIR: artifacts/phase0
+  RELEASE_EVIDENCE_INDEX_JSON: artifacts/phase0/release-evidence-index.json
+
+jobs:
+  release-check:
+    name: release-check
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+      - name: Run release-check
+        run: make release-check RELEASE_EVIDENCE_DIR="$RELEASE_EVIDENCE_DIR" RELEASE_EVIDENCE_INDEX_JSON="$RELEASE_EVIDENCE_INDEX_JSON"
+      - name: Upload Phase 0 release evidence
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@v4
+        with:
+          name: phase0-release-evidence
+          path: artifacts/phase0
+          if-no-files-found: error
+          retention-days: 14

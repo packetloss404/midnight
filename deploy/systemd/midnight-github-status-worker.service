@@ -1,0 +1,21 @@
+[Unit]
+Description=Midnight GitHub deployment status worker
+Documentation=https://github.com/midnight/midnight
+After=network-online.target postgresql.service midnight-server.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=midnight
+Group=midnight
+EnvironmentFile=-/etc/midnight/midnight.env
+ExecStart=/usr/bin/midnight-github-status-worker
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

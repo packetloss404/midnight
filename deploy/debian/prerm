@@ -1,0 +1,118 @@
+#!/bin/sh
+# prerm - stop Midnight services before package removal.
+#
+# We stop and disable the units, but DO NOT delete:
+#   * /var/lib/midnight (state, including Postgres data and registry)
+#   * /var/log/midnight (logs)
+#   * /etc/midnight (configuration and keys including midnight.env and KEK)
+#   * /etc/docker/daemon.json (left with a marker comment by postrm
+#     --purge per the panel-locked uninstall enumeration in §0.6)
+#
+# Phase 0/1 alpha: removal is reversible until `--purge` is passed.
+
+set -e
+
+UPGRADE_STATE_DIR=/run/midnight-package-upgrade
+UPGRADE_ACTIVE_UNITS="$UPGRADE_STATE_DIR/active-units"
+MIDNIGHT_UNIT_FILES="midnight-server.service midnight-worker.service midnight-agent.service midnight-buildkit-worker.service midnight-buildkit.service midnight-registry.service midnight-github-status-worker.service"
+
+stop_midnight_units() {
+    systemctl stop \
+        midnight-server.service \
+        midnight-worker.service \
+        midnight-agent.service \
+        midnight-buildkit-worker.service \
+        midnight-buildkit.service \
+        midnight-registry.service \
+        midnight-github-status-worker.service
+}
+
+disable_midnight_units() {
+    systemctl disable \
+        midnight-server.service \
+        midnight-worker.service \
+        midnight-agent.service \
+        midnight-buildkit-worker.service \
+        midnight-buildkit.service \
+        midnight-registry.service \
+        midnight-github-status-worker.service
+}
+
+validate_upgrade_snapshot() {
+    [ -f "$UPGRADE_ACTIVE_UNITS" ] && [ ! -L "$UPGRADE_ACTIVE_UNITS" ] || {
+        echo "midnight: refusing unsafe package-upgrade state file $UPGRADE_ACTIVE_UNITS" >&2
+        return 1
+    }
+    active_owner="$(stat -c %u -- "$UPGRADE_ACTIVE_UNITS")" || return 1
+    active_mode="$(stat -c %a -- "$UPGRADE_ACTIVE_UNITS")" || return 1
+    if [ "$active_owner" != 0 ] || [ "$active_mode" != 600 ]; then
+        echo "midnight: refusing package-upgrade state with unsafe ownership or mode" >&2
+        return 1
+    fi
+    while IFS= read -r saved_unit; do
+        case " $MIDNIGHT_UNIT_FILES " in
+            *" $saved_unit "*) ;;
+            *)
+                echo "midnight: package-upgrade state contains an unknown unit" >&2
+                return 1
+                ;;
+        esac
+    done <"$UPGRADE_ACTIVE_UNITS"
+}
+
+snapshot_active_units() {
+    # Preserve an earlier snapshot after a failed configuration attempt. A
+    # retry must restart the original set, not replace it with the now-stopped
+    # set observed during the retry.
+    if [ -f "$UPGRADE_ACTIVE_UNITS" ] && [ ! -L "$UPGRADE_ACTIVE_UNITS" ]; then
+        validate_upgrade_snapshot
+        return 0
+    fi
+    if [ -e "$UPGRADE_STATE_DIR" ] && { [ ! -d "$UPGRADE_STATE_DIR" ] || [ -L "$UPGRADE_STATE_DIR" ]; }; then
+        echo "midnight: unsafe package-upgrade state path $UPGRADE_STATE_DIR" >&2
+        exit 1
+    fi
+    install -d -m 0700 -o root -g root "$UPGRADE_STATE_DIR"
+    active_tmp="$UPGRADE_ACTIVE_UNITS.tmp.$$"
+    umask 077
+    : >"$active_tmp"
+    for unit in $MIDNIGHT_UNIT_FILES; do
+        if systemctl is-active --quiet "$unit"; then
+            printf '%s\n' "$unit" >>"$active_tmp"
+        fi
+    done
+    chown root:root "$active_tmp"
+    chmod 0600 "$active_tmp"
+    mv "$active_tmp" "$UPGRADE_ACTIVE_UNITS"
+}
+
+case "$1" in
+upgrade)
+    if command -v systemctl >/dev/null; then
+        snapshot_active_units
+        # Stop in one systemd transaction and fail the upgrade if the former
+        # binaries cannot be quiesced. Database migration never races an old
+        # process against the new schema.
+        stop_midnight_units
+    fi
+    ;;
+failed-upgrade|deconfigure)
+    if command -v systemctl >/dev/null; then
+        stop_midnight_units 2>/dev/null || true
+    fi
+    ;;
+remove)
+    if command -v systemctl >/dev/null; then
+        stop_midnight_units 2>/dev/null || true
+        disable_midnight_units 2>/dev/null || true
+    fi
+    ;;
+*)
+    echo "prerm called with unknown argument \`$1'" >&2
+    exit 1
+    ;;
+esac
+
+#DEBHELPER#
+
+exit 0

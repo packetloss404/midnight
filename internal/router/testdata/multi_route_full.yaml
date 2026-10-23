@@ -1,0 +1,54 @@
+http:
+  routers:
+    acme-http01-challenge:
+      rule: 'PathPrefix(`/.well-known/acme-challenge/`)'
+      service: 'acme-http@internal'
+      entryPoints:
+        - 'web'
+      priority: 2147483647
+    alpha:
+      rule: 'Host(`alpha.example.test`) && PathPrefix(`/`)'
+      service: 'alpha-service'
+      entryPoints:
+        - 'websecure'
+      tls:
+        certResolver: 'letsencrypt'
+        options: 'modern-tls'
+      middlewares:
+        - 'gzip'
+        - 'secure-headers'
+    bravo:
+      rule: 'Host(`bravo.example.test`) && PathPrefix(`/`)'
+      service: 'bravo-service'
+      entryPoints:
+        - 'websecure'
+      middlewares:
+        - 'http-to-https'
+  services:
+    alpha-service:
+      loadBalancer:
+        servers:
+          - url: 'http://10.0.0.5:8080'
+    bravo-service:
+      loadBalancer:
+        servers:
+          - url: 'http://10.0.0.6:8081'
+  middlewares:
+    gzip:
+      compress:
+        minResponseBodyBytes: 1500
+    http-to-https:
+      redirectScheme:
+        scheme: 'https'
+        permanent: true
+    secure-headers:
+      headers:
+        stsSeconds: 63072000
+        stsIncludeSubdomains: true
+        stsPreload: false
+tls:
+  options:
+    modern-tls:
+      minVersion: 'VersionTLS12'
+      cipherSuites:
+        - 'TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256'

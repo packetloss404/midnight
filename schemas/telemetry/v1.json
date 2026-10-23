@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.midnight.dev/telemetry/v1.json",
+  "title": "Midnight Telemetry v1",
+  "description": "Phase 0 telemetry envelope with a closed top-level key set and allowlisted feature flag states.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "eventName", "emittedAt", "source", "featureFlags"],
+  "properties": {
+    "schemaVersion": { "const": "v1" },
+    "eventName": { "type": "string", "minLength": 1 },
+    "emittedAt": { "type": "string", "format": "date-time" },
+    "source": { "type": "string", "minLength": 1 },
+    "featureFlags": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "enabled"],
+        "properties": {
+          "name": {
+            "type": "string",
+            "enum": ["acme.issuance", "registry.gc", "ai.gateway", "auto.remediation", "telemetry"]
+          },
+          "enabled": { "type": "boolean" }
+        }
+      }
+    }
+  }
+}

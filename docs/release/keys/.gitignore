@@ -1,0 +1,35 @@
+# Defense-in-depth: refuse to commit private GPG material that may
+# have leaked into this directory by accident. Public fingerprints
+# (the .txt files) are committed and tracked; everything else is
+# ignored.
+#
+# See docs/release/keys/README.md "What MUST NOT be committed here"
+# and agile/handoff/governance/RELEASE_KEY_CUSTODY.md for the policy.
+
+# Private key material
+*.gpg
+*.pgp
+*.priv
+*.private
+secring.*
+*.key
+*.pem
+*.p12
+*.pfx
+
+# Local YubiKey unlock state
+.gnupg/
+gnupg-keyring/
+*.gnupg/
+
+# Editor / OS noise
+*.swp
+.DS_Store
+Thumbs.db
+
+# Tracked fixtures (allowlist) — keep the public-facing files we
+# explicitly want under version control.
+!midnight-release-fingerprint.txt
+!REVOKED-*.txt
+!README.md
+!.gitignore

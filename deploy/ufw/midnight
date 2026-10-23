@@ -1,0 +1,4 @@
+[Midnight]
+title=Midnight server
+description=Midnight API/control-plane endpoint
+ports=8080/tcp

@@ -1,0 +1,46 @@
+name: generated-client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - api/openapi/v1alpha/midnight.yaml
+      - api/openapi/v1alpha/oapi-codegen.*.yaml
+      - pkg/midnightctl/**
+      - scripts/generate-midnightctl.sh
+      - .github/workflows/generated-client.yml
+      - go.mod
+      - go.sum
+  pull_request:
+    branches: [main]
+    paths:
+      - api/openapi/v1alpha/midnight.yaml
+      - api/openapi/v1alpha/oapi-codegen.*.yaml
+      - pkg/midnightctl/**
+      - scripts/generate-midnightctl.sh
+      - .github/workflows/generated-client.yml
+      - go.mod
+      - go.sum
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  generated-client:
+    name: generated-client
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+          cache: true
+      - name: Verify generated files are current
+        run: scripts/generate-midnightctl.sh check
+      - name: Run generated client smoke tests
+        run: go test ./pkg/midnightctl -count=1

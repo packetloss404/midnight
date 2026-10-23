@@ -1,0 +1,77 @@
+version: 1
+owner: S08
+sprint: Phase 0 Beta Sprint B8
+capability: phase3 promotion readiness
+local-only: true
+reservation-index: test/drills/phase3-reservations.yaml
+source-manifest: test/drills/manifest.yaml
+checks:
+  checklist:
+    - id: D-20
+      status: not-ready
+      domain: networking
+      reservation-id: D-20
+      carrier-id: D-08
+      required-unblockers:
+        - accepted-id-range
+        - executable-rig
+        - harness-assertion
+        - live-evidence-ref
+        - rollback-boundary
+      evidence-refs:
+        - artifacts/phase3/promotion/D-20/accepted-id-range.json
+        - artifacts/phase3/promotion/D-20/executable-rig.json
+        - artifacts/phase3/promotion/D-20/harness-assertion.json
+        - artifacts/phase3/promotion/D-20/live-evidence-ref.json
+        - artifacts/phase3/promotion/D-20/rollback-boundary.json
+    - id: D-21
+      status: not-ready
+      domain: runtime_adapter
+      reservation-id: D-21
+      carrier-id: D-06
+      required-unblockers:
+        - accepted-id-range
+        - executable-rig
+        - harness-assertion
+        - live-evidence-ref
+        - rollback-boundary
+      evidence-refs:
+        - artifacts/phase3/promotion/D-21/accepted-id-range.json
+        - artifacts/phase3/promotion/D-21/executable-rig.json
+        - artifacts/phase3/promotion/D-21/harness-assertion.json
+        - artifacts/phase3/promotion/D-21/live-evidence-ref.json
+        - artifacts/phase3/promotion/D-21/rollback-boundary.json
+    - id: D-22
+      status: not-ready
+      domain: registry_cache
+      reservation-id: D-22
+      carrier-id: D-07
+      required-unblockers:
+        - accepted-id-range
+        - executable-rig
+        - harness-assertion
+        - live-evidence-ref
+        - rollback-boundary
+      evidence-refs:
+        - artifacts/phase3/promotion/D-22/accepted-id-range.json
+        - artifacts/phase3/promotion/D-22/executable-rig.json
+        - artifacts/phase3/promotion/D-22/harness-assertion.json
+        - artifacts/phase3/promotion/D-22/live-evidence-ref.json
+        - artifacts/phase3/promotion/D-22/rollback-boundary.json
+    - id: D-23
+      status: not-ready
+      domain: volume_attach
+      reservation-id: D-23
+      carrier-id: D-14
+      required-unblockers:
+        - accepted-id-range
+        - executable-rig
+        - harness-assertion
+        - live-evidence-ref
+        - rollback-boundary
+      evidence-refs:
+        - artifacts/phase3/promotion/D-23/accepted-id-range.json
+        - artifacts/phase3/promotion/D-23/executable-rig.json
+        - artifacts/phase3/promotion/D-23/harness-assertion.json
+        - artifacts/phase3/promotion/D-23/live-evidence-ref.json
+        - artifacts/phase3/promotion/D-23/rollback-boundary.json

@@ -1,0 +1,205 @@
+version: 1
+owner: S08
+drills:
+  - id: D-01
+    title: API target down alert drill
+    status: placeholder
+    reason-code: phase0.alert.api-target-down
+    event: alert.api_target_down
+    diagnostic: confirm API target scrape failure and alert labels
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-02
+    title: Disk pressure alert drill
+    status: placeholder
+    reason-code: phase0.alert.disk-pressure
+    event: alert.disk_pressure
+    diagnostic: confirm disk usage threshold and affected filesystem
+    runbook: docs/runbooks/backup-restore.md
+  - id: D-03
+    title: Agent lost alert drill
+    status: placeholder
+    reason-code: phase0.alert.agent-lost
+    event: alert.agent_lost
+    diagnostic: confirm stale heartbeat age and impacted host
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-04
+    title: Backup failure alert drill
+    status: placeholder
+    reason-code: phase0.alert.backup-failed
+    event: alert.backup_failed
+    diagnostic: confirm failed backup attempt and destination state
+    runbook: docs/runbooks/backup-restore.md
+  - id: D-05
+    title: Certificate expiry alert drill
+    status: placeholder
+    reason-code: phase0.alert.cert-expiring-soon
+    event: alert.cert_expiring_soon
+    diagnostic: confirm certificate expiry window and renewal owner
+    runbook: docs/runbooks/key-rotation.md
+  - id: D-06
+    title: Deploy job stuck alert drill
+    status: placeholder
+    reason-code: phase0.alert.deploy-job-stuck
+    event: alert.deploy_job_stuck
+    diagnostic: confirm deploy heartbeat gap exceeds lease threshold
+    runbook: docs/runbooks/support-bundle.md
+    metadata:
+      tags:
+        - phase3
+        - host-scoped
+        - local-only
+      notes:
+        - phase3-drill=runtime-adapter-lease-recovery
+        - host-scope=runtime-host
+        - domain=runtime_adapter
+        - evidence-ref=artifacts/phase3/drills/runtime-adapter-lease/plan.json
+        - execution=planner-only
+      subcases:
+        - phase3.host=runtime-host
+        - phase3.domain=runtime_adapter
+        - phase3.planner=runtime-adapter-lease-recovery
+        - phase3.evidence=artifacts/phase3/drills/runtime-adapter-lease/plan.json
+  - id: D-07
+    title: BuildKit cache corruption drill
+    status: placeholder
+    reason-code: phase0.alert.buildkit-cache-corruption
+    event: alert.buildkit_cache_corruption
+    diagnostic: confirm cache verification failure and builder host
+    runbook: docs/runbooks/support-bundle.md
+    metadata:
+      tags:
+        - phase3
+        - host-scoped
+        - local-only
+      notes:
+        - phase3-drill=registry-cache-integrity
+        - host-scope=builder-host
+        - domain=registry_cache
+        - evidence-ref=artifacts/phase3/drills/registry-cache-integrity/plan.json
+        - execution=planner-only
+      subcases:
+        - phase3.host=builder-host
+        - phase3.domain=registry_cache
+        - phase3.planner=registry-cache-integrity
+        - phase3.evidence=artifacts/phase3/drills/registry-cache-integrity/plan.json
+  - id: D-08
+    title: Conntrack pressure alert drill
+    status: placeholder
+    reason-code: phase0.alert.conntrack-pressure
+    event: alert.conntrack_pressure
+    diagnostic: confirm conntrack usage ratio and node pressure
+    runbook: docs/runbooks/support-bundle.md
+    metadata:
+      tags:
+        - phase3
+        - host-scoped
+        - local-only
+      notes:
+        - phase3-drill=conntrack-flush-correctness
+        - host-scope=runtime-host
+        - domain=networking
+        - evidence-ref=artifacts/phase3/drills/conntrack-flush/plan.json
+        - execution=planner-only
+      subcases:
+        - phase3.host=runtime-host
+        - phase3.domain=networking
+        - phase3.planner=conntrack-flush-correctness
+        - phase3.evidence=artifacts/phase3/drills/conntrack-flush/plan.json
+  - id: D-09
+    title: Off-host backup missing drill
+    status: placeholder
+    reason-code: phase0.backup.offhost-missing
+    event: backup.offhost_missing
+    diagnostic: confirm no off-host destination is configured
+    runbook: docs/runbooks/backup-restore.md
+  - id: D-10
+    title: Support bundle selector validation drill
+    status: placeholder
+    reason-code: phase0.supportbundle.selector-invalid
+    event: supportbundle.selector_invalid
+    diagnostic: confirm selector validation rejects unbounded requests
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-11
+    title: Support bundle blocked path drill
+    status: placeholder
+    reason-code: phase0.supportbundle.blocked-path
+    event: supportbundle.blocked_path
+    diagnostic: confirm hard-blocked secret, token, and ACME paths
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-12
+    title: Support bundle manifest review drill
+    status: placeholder
+    reason-code: phase0.supportbundle.manifest-review
+    event: supportbundle.manifest_review
+    diagnostic: confirm manifest JSON preview contains safe relative paths
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-13
+    title: Local backup URI parser drill
+    status: placeholder
+    reason-code: phase0.backup.local-uri
+    event: backup.local_uri
+    diagnostic: confirm local and file URI validation behavior
+    runbook: docs/runbooks/backup-restore.md
+  - id: D-14
+    title: Local backup destination I/O drill
+    status: placeholder
+    reason-code: phase0.backup.destination-placeholder
+    event: backup.destination_placeholder
+    diagnostic: confirm local destination write, read, list, and path safety
+    runbook: docs/runbooks/backup-restore.md
+    metadata:
+      tags:
+        - phase3
+        - host-scoped
+        - local-only
+      notes:
+        - phase3-drill=volume-attach-destination-contract
+        - host-scope=backup-host
+        - domain=volume_attach
+        - evidence-ref=artifacts/phase3/drills/volume-attach-destination/plan.json
+        - execution=planner-only
+      subcases:
+        - local-open
+        - local-write
+        - local-read
+        - local-list
+        - path-escape-rejected
+        - phase3.host=backup-host
+        - phase3.domain=volume_attach
+        - phase3.planner=volume-attach-destination-contract
+        - phase3.evidence=artifacts/phase3/drills/volume-attach-destination/plan.json
+  - id: D-15
+    title: Restore planning checksum drill
+    status: placeholder
+    reason-code: phase0.backup.restore-checksum
+    event: backup.restore_checksum
+    diagnostic: confirm restore object key, checksum, and rollback owner
+    runbook: docs/runbooks/backup-restore.md
+  - id: D-16
+    title: Alert file packaging drill
+    status: placeholder
+    reason-code: phase0.observability.alert-packaging
+    event: observability.alert_packaging
+    diagnostic: confirm packaged Prometheus alerts match locked definitions
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-17
+    title: Phase0 gate manifest validation drill
+    status: placeholder
+    reason-code: phase0.gate.manifest-validation
+    event: gate.manifest_validation
+    diagnostic: confirm every drill row has release-gate metadata
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-18
+    title: Phase0 gate alert validation drill
+    status: placeholder
+    reason-code: phase0.gate.alert-validation
+    event: gate.alert_validation
+    diagnostic: confirm alert validation fails on locked-rule drift
+    runbook: docs/runbooks/support-bundle.md
+  - id: D-19
+    title: QA gate release readiness drill
+    status: placeholder
+    reason-code: phase0.gate.release-readiness
+    event: gate.release_readiness
+    diagnostic: confirm QA gate reports release readiness blockers
+    runbook: docs/runbooks/support-bundle.md

@@ -1,0 +1,42 @@
+# gqlgen.yml -- Midnight GraphQL gateway code-generation config.
+#
+# The runtime is hand-rolled on top of gqlparser/v2 (gqlgen's parser/
+# validator) so resolvers can delegate directly to internal/api service
+# structs without round-tripping through HTTP. This file documents the
+# intended `gqlgen generate` shape for the day we replace the hand-rolled
+# executor with the full gqlgen runtime; it is not consumed at build time.
+#
+# To regenerate (when/if we adopt the full gqlgen runtime):
+#   cd internal/graphql && go run github.com/99designs/gqlgen generate
+
+schema:
+  - ../../schemas/graphql/schema.graphql
+
+exec:
+  filename: gqlgen_generated.go
+  package: graphql
+
+model:
+  filename: gqlgen_models.go
+  package: graphql
+
+resolver:
+  layout: follow-schema
+  dir: resolvers
+  package: resolvers
+  filename_template: "{name}.resolvers.go"
+
+# Treat ID, Time, JSON as the named Go types we already use.
+models:
+  ID:
+    model:
+      - github.com/midnight/midnight/pkg/orailtypes.ID
+  Time:
+    model:
+      - github.com/99designs/gqlgen/graphql.Time
+  JSON:
+    model:
+      - github.com/99designs/gqlgen/graphql.Map
+
+# Omit Subscription resolver -- the v1 surface is poll-only by design.
+omit_slice_element_pointers: true

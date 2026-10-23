@@ -1,0 +1,60 @@
+# Pinned external tool/binary versions for Phase 1 Lane 3 (build + ingress).
+#
+# Lane 3 selection rationale (recorded so changes go through review):
+#
+#   * BuildKit — we shell out to the pinned `buildctl` binary rather than
+#     importing github.com/moby/buildkit/client. The Go client transitively
+#     pulls containerd, runc, libnetwork, and the docker module — a multi-MB
+#     supply-chain expansion that is hard to reproduce on a stdlib-first
+#     repo. The CLI surface (`buildctl build --frontend dockerfile.v0 ...`)
+#     is the same surface ADR-008 expects to record in deployment snapshots
+#     anyway, and pinning `buildkit` here lets the wrapper verify the
+#     operator-supplied `buildkitd` / `buildctl` binaries before serving.
+#
+#   * distribution (OCI registry) — we run `registry serve` as a child
+#     process from cmd/midnight-registry rather than embedding the
+#     distribution.v3 packages. The package import graph drags in the entire
+#     OCI image-spec/azure/gcs/swift/oss storage drivers; we only need the
+#     filesystem driver for Phase 1.
+#
+#   * Lego (ACME) — we DO embed github.com/go-acme/lego/v4 as a Go module
+#     dependency. The DNS-01 + wildcard issuance flow needs typed challenge
+#     solvers, propagation polling, and the registered Cloudflare/Route53
+#     provider implementations; shelling out to `lego` would lose typed
+#     errors and propagation diagnostics required by FEATURE_ACME_DNS01.
+#
+#   * Traefik — pinned binary version operators must run; the file-provider
+#     directory written by Midnight (see deploy/traefik/) is the ABI.
+#
+#   * cosign — same posture as BuildKit and distribution: we fork-exec the
+#     pinned cosign binary instead of importing github.com/sigstore/cosign/v2.
+#     The Go SDK import is binding-deferred to v1.0.0 per
+#     agile/handoff/governance/COSIGN_SDK_BOUNDARY.md (closes
+#     V010_ALPHA_GREENLIGHT_BRIEF §4 blocker (3)). The release workflow
+#     (.github/workflows/release.yml — Blocker 4's territory) and the agent
+#     runtime verifier (internal/runtime/docker/cosign_exec_verifier.go) both
+#     consume the version + per-arch SHA-256 digests recorded here. The
+#     digests are the GitHub-published asset digests from the v2.6.3 release
+#     (https://github.com/sigstore/cosign/releases/tag/v2.6.3); operators that
+#     mirror the binary internally should re-verify against the same hashes.
+#
+# These versions are consumed by:
+#   * internal/build/versions.go    (BuildKit pin enforcement)
+#   * internal/registry/versions.go (distribution pin enforcement)
+#   * internal/router/versions.go   (Traefik pin enforcement)
+#   * internal/acme/versions.go     (Lego pin enforcement)
+#   * tools/release-verify/main.go  (cosign + buildkit pin loaded from this file
+#                                    so the supply-chain pin is enforced at
+#                                    build time rather than from env vars).
+
+buildkit: v0.28.1
+railpack: v0.23.0
+railpack_frontend: "ghcr.io/railwayapp/railpack-frontend:v0.23.0@sha256:ba4c430961d9ee3215c64807727a4b11e2198daac31250e9db9eaf9cee4624d6"
+distribution: v3.0.0
+traefik: v3.1.5
+lego: v4.17.4
+cosign: v2.6.3
+cosign_linux_amd64_digest: "sha256:7c78a7f2efc00088bd788a758db6e0928e79f3e0eb83eb5d3c499ed98da4c4f4"
+cosign_linux_arm64_digest: "sha256:b7c23659a50a59fd8eec44b87188e9062157d0c87796cac7b38727e5390c4917"
+docker_engine_api_min: "1.43"
+docker_engine_min: "24.0"

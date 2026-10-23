@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+# Add a GitHub private vulnerability reporting contact link only after the
+# public repository URL is final. Until then, SECURITY.md is the canonical
+# private reporting policy and public issues must not collect vulnerability
+# details.

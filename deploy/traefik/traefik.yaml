@@ -1,0 +1,91 @@
+# Midnight Phase 1 Lane 3 — Traefik static configuration sample.
+#
+# This file is the ABI between Midnight's control plane and the operator's
+# Traefik instance. The defaults below match ADR-006 (panel-locked ingress
+# defaults) and ADR-007 (DNS-01 wildcard for the apps-domain).
+#
+# Operators install Traefik v3.1.5 (pinned in versions.yaml) and copy this
+# file to /etc/traefik/traefik.yaml. The file provider is configured to
+# watch /etc/midnight/traefik/dynamic/, which is the directory Midnight
+# writes generated route artifacts to via os.Rename atomic writes.
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  filePath: /var/log/midnight/traefik/access.jsonl
+  bufferingSize: 0
+
+api:
+  # Bound to the loopback-only `traefik` entry point below. Midnight uses
+  # /api/http/routers as active-config evidence; do not expose this port.
+  dashboard: true
+  insecure: true
+
+# Panel-locked ingress defaults (ADR-006, line 160 of midnight-platform-plan.md).
+entryPoints:
+  web:
+    address: ":80"
+    transport:
+      respondingTimeouts:
+        readTimeout: 60s
+        writeTimeout: 60s
+        idleTimeout: 180s
+    http:
+      maxRequestBodyBytes: 33554432   # 32 MiB
+  websecure:
+    address: ":443"
+    transport:
+      respondingTimeouts:
+        readTimeout: 60s
+        writeTimeout: 60s
+        idleTimeout: 180s
+    http:
+      maxRequestBodyBytes: 33554432   # 32 MiB
+  traefik:
+    address: "127.0.0.1:8080"
+
+providers:
+  # Docker provider is intentionally absent — ADR-006 forbids it. Tenants
+  # MUST NOT be able to influence routing via container labels.
+  file:
+    directory: /etc/midnight/traefik/dynamic
+    watch: true
+
+# ACME state file lives under /var/lib/midnight/acme. Restoring this file
+# byte-exact at 0600 before Traefik starts is a panel-locked invariant
+# (ADR-007 line 154).
+certificatesResolvers:
+  letsencrypt-staging:
+    acme:
+      email: ops@example.invalid
+      storage: /var/lib/midnight/acme/acme.staging.json
+      caServer: https://acme-staging-v02.api.letsencrypt.org/directory
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+          - "9.9.9.9:53"
+  letsencrypt-prod:
+    acme:
+      email: ops@example.invalid
+      storage: /var/lib/midnight/acme/acme.prod.json
+      caServer: https://acme-v02.api.letsencrypt.org/directory
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "1.1.1.1:53"
+          - "8.8.8.8:53"
+          - "9.9.9.9:53"
+
+metrics:
+  prometheus:
+    addRoutersLabels: true
+    entryPoint: traefik

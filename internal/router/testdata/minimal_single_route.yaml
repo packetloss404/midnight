@@ -1,0 +1,18 @@
+http:
+  routers:
+    acme-http01-challenge:
+      rule: 'PathPrefix(`/.well-known/acme-challenge/`)'
+      service: 'acme-http@internal'
+      entryPoints:
+        - 'web'
+      priority: 2147483647
+    app:
+      rule: 'Host(`app.example.test`) && PathPrefix(`/`)'
+      service: 'app-service'
+      entryPoints:
+        - 'websecure'
+  services:
+    app-service:
+      loadBalancer:
+        servers:
+          - url: 'http://10.0.0.1:8080'

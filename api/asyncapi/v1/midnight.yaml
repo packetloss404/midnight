@@ -1,0 +1,186 @@
+asyncapi: 3.0.0
+info:
+  title: Midnight Event API
+  version: 1.0.0-alpha
+  description: >
+    Outbound webhooks delivered by Midnight. Control-plane events use
+    CloudEvents 1.0 structured mode; built-in monitor notifications use their
+    own JSON payload. Delivery is at least once; consumers deduplicate using
+    the signed Midnight-Delivery-Id and, for CloudEvents, `(source, id)`.
+  license:
+    name: Apache-2.0
+servers:
+  subscriber:
+    host: '{subscriber_host}'
+    protocol: https
+    description: Subscriber-controlled HTTPS webhook receiver.
+    variables:
+      subscriber_host:
+        default: example.invalid
+channels:
+  outboundEvents:
+    address: /{subscriber_path}
+    parameters:
+      subscriber_path:
+        description: Subscriber-configured webhook path.
+    messages:
+      midnightEvent:
+        $ref: '#/components/messages/MidnightEvent'
+      monitorNotification:
+        $ref: '#/components/messages/MonitorNotification'
+operations:
+  deliverMidnightEvent:
+    action: send
+    channel:
+      $ref: '#/channels/outboundEvents'
+    summary: Deliver a signed control-plane event or monitor notification to a subscriber.
+    messages:
+      - $ref: '#/channels/outboundEvents/messages/midnightEvent'
+      - $ref: '#/channels/outboundEvents/messages/monitorNotification'
+components:
+  messages:
+    MidnightEvent:
+      name: MidnightEvent
+      title: Midnight structured CloudEvent
+      contentType: application/cloudevents+json
+      headers:
+        $ref: '#/components/schemas/CloudEventWebhookHeaders'
+      payload:
+        $ref: '#/components/schemas/CloudEvent'
+    MonitorNotification:
+      name: MonitorNotification
+      title: Built-in monitor state notification
+      contentType: application/json
+      headers:
+        $ref: '#/components/schemas/MonitorWebhookHeaders'
+      payload:
+        $ref: '#/components/schemas/MonitorNotification'
+  schemas:
+    CloudEventWebhookHeaders:
+      type: object
+      additionalProperties: false
+      required:
+        - Midnight-Signature
+        - Midnight-Event-Id
+        - Midnight-Delivery-Id
+        - Midnight-Event-Type
+      properties:
+        Midnight-Signature:
+          type: string
+          description: Versioned v2 HMAC over delivery ID, timestamp, and the exact request body.
+          examples:
+            - t=1786521600,v2=2f7d67c8d63d643c9fd4e13aac40af1e17bba53ea0de7d37da6526d2c278fe11,kid=primary
+        Midnight-Event-Id:
+          type: string
+        Midnight-Delivery-Id:
+          type: string
+        Midnight-Event-Type:
+          $ref: '#/components/schemas/EventType'
+        Traceparent:
+          type: string
+    MonitorWebhookHeaders:
+      type: object
+      additionalProperties: false
+      required:
+        - Midnight-Signature
+        - Midnight-Event-Id
+        - Midnight-Delivery-Id
+        - Midnight-Event-Type
+      properties:
+        Midnight-Signature:
+          type: string
+          description: Versioned v2 HMAC over delivery ID, timestamp, and the exact request body.
+        Midnight-Event-Id:
+          type: string
+          description: Monitor identifier.
+        Midnight-Delivery-Id:
+          type: string
+          pattern: '^mdl_'
+        Midnight-Event-Type:
+          $ref: '#/components/schemas/MonitorEventType'
+    MonitorEventType:
+      type: string
+      enum:
+        - monitor.firing
+        - monitor.resolved
+    MonitorNotification:
+      type: object
+      additionalProperties: true
+      required:
+        - event_type
+      properties:
+        event_type:
+          $ref: '#/components/schemas/MonitorEventType'
+        incident_id:
+          type: string
+        monitor:
+          type: object
+          additionalProperties: true
+        scope:
+          type: object
+          additionalProperties: true
+        observed_at:
+          type: string
+          format: date-time
+    EventType:
+      type: string
+      enum:
+        - dev.midnight.deployment.queued
+        - dev.midnight.deployment.building
+        - dev.midnight.deployment.deploying
+        - dev.midnight.deployment.active
+        - dev.midnight.deployment.failed
+        - dev.midnight.deployment.superseded
+        - dev.midnight.deployment.canceled
+        - dev.midnight.domain.verified
+        - dev.midnight.domain.tls_issued
+        - dev.midnight.domain.ownership_lapsed
+        - dev.midnight.backup.succeeded
+        - dev.midnight.backup.failed
+        - dev.midnight.audit.checkpoint
+        - dev.midnight.host.heartbeat_lost
+        - dev.midnight.operation.completed
+        - dev.midnight.operation.failed
+    CloudEvent:
+      type: object
+      additionalProperties: false
+      required:
+        - specversion
+        - id
+        - source
+        - type
+        - time
+        - traceparent
+        - midnightrequestid
+        - midnighttenantid
+      properties:
+        specversion:
+          type: string
+          const: '1.0'
+        id:
+          type: string
+          pattern: '^evt_'
+        source:
+          type: string
+          format: uri
+          description: Absolute event producer identifier, normally a Midnight URN.
+        subject:
+          type: string
+        type:
+          $ref: '#/components/schemas/EventType'
+        datacontenttype:
+          type: string
+          const: application/json
+        dataschema:
+          type: string
+          format: uri
+        time:
+          type: string
+          format: date-time
+        traceparent:
+          type: string
+        midnightrequestid:
+          type: string
+        midnighttenantid:
+          type: string
+        data: {}

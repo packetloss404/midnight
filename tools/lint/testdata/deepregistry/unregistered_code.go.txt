@@ -1,0 +1,8 @@
+// This is a test fixture. The .go.txt extension keeps Go's toolchain from
+// trying to compile it. The deep-registry guard test copies it into a
+// temporary repo as `internal/example/unregistered.go`.
+package example
+
+// UnregisteredCode is not in docs/error-codes.md and not allowlisted; the
+// deep-registry guard must reject it.
+const UnregisteredCode = "TOTALLY_NEW_CODE"

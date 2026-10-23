@@ -1,0 +1,33 @@
+[Unit]
+Description=Midnight server
+Documentation=https://github.com/midnight/midnight
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=midnight
+Group=midnight
+EnvironmentFile=-/etc/midnight/midnight.env
+ExecStart=/usr/bin/midnight-server serve
+ExecStartPost=/usr/bin/midnight-doctor wait --tcp ${MIDNIGHT_SERVER_ADDR} --timeout 45s
+TimeoutStartSec=75s
+Restart=on-failure
+RestartSec=5s
+StateDirectory=midnight
+StateDirectory=midnight/uploads
+LogsDirectory=midnight
+RuntimeDirectory=midnight
+# midnight-buildkit nests its socket at /run/midnight/buildkit, inside the
+# directory this unit owns. Without this, restarting this unit deletes
+# /run/midnight and destroys that socket, after which every source build
+# fails with an unexplained "buildctl solve failed: exit status 1" while
+# buildkitd keeps running on an unlinked inode.
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

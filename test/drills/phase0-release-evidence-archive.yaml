@@ -1,0 +1,64 @@
+version: 1
+owner: S08
+sprint: Phase 0 Beta Sprint B9
+capability: phase0 release evidence archive
+local-only: true
+source-manifest: test/drills/manifest.yaml
+archive-root: artifacts/phase0
+gate-command:
+  name: phase0-release-gate
+  mode: local-only
+  command-ref: artifacts/phase0/phase0-release-gate-command.txt
+  required-flag: --verify-evidence-files
+evidence-refs:
+  canonical:
+    release-evidence: artifacts/phase0/phase0-release-evidence.json
+    release-evidence-index: artifacts/phase0/phase0-release-evidence-index.json
+    release-summary: artifacts/phase0/phase0-release-summary.json
+  operator-metadata:
+    operator-notes: artifacts/phase0/operator-notes.md
+    runner-os: artifacts/phase0/runner-os.json
+    commit-refs: artifacts/phase0/commit-refs.json
+verification-requirements:
+  - canonical-evidence-files-exist
+  - canonical-evidence-index-references-release-evidence
+  - canonical-evidence-index-references-release-summary
+  - gate-command-recorded-with-verify-evidence-files
+  - runner-os-recorded-as-data
+  - commit-refs-recorded-as-data
+  - operator-notes-recorded-or-explicitly-empty
+  - evidence-refs-are-workspace-relative
+readiness:
+  rows:
+    - id: phase0-release-evidence
+      status: pending-local-archive
+      required-ref: artifacts/phase0/phase0-release-evidence.json
+      verification:
+        - canonical-evidence-files-exist
+        - canonical-evidence-index-references-release-evidence
+    - id: phase0-release-evidence-index
+      status: pending-local-archive
+      required-ref: artifacts/phase0/phase0-release-evidence-index.json
+      verification:
+        - canonical-evidence-files-exist
+        - canonical-evidence-index-references-release-summary
+    - id: phase0-release-summary
+      status: pending-local-archive
+      required-ref: artifacts/phase0/phase0-release-summary.json
+      verification:
+        - canonical-evidence-files-exist
+    - id: operator-notes
+      status: pending-local-archive
+      required-ref: artifacts/phase0/operator-notes.md
+      verification:
+        - operator-notes-recorded-or-explicitly-empty
+    - id: runner-os
+      status: pending-local-archive
+      required-ref: artifacts/phase0/runner-os.json
+      verification:
+        - runner-os-recorded-as-data
+    - id: commit-refs
+      status: pending-local-archive
+      required-ref: artifacts/phase0/commit-refs.json
+      verification:
+        - commit-refs-recorded-as-data

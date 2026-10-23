@@ -1,0 +1,11 @@
+# Staging directory for the console bundle compiled into midnight-server by
+# internal/api/webui_embed.go (`//go:embed all:webdist`).
+#
+# Contents are a verbatim copy of web-next/dist produced by `make web-embed`
+# (or `task web:embed`) and are never committed: the console is a build output,
+# not source. Only this file is tracked, which keeps the directory present so a
+# fresh checkout still compiles — a binary built without running web-embed
+# reports the console as unavailable at "/" and `make build-server` refuses to
+# produce it at all.
+*
+!.gitignore

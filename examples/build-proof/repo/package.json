@@ -1,0 +1,13 @@
+{
+  "name": "midnight-build-proof",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Tiny Node.js hello-world that the Midnight build pipeline turns into an immutable image and the deploy worker hands off to a container.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

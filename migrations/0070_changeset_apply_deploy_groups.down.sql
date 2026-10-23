@@ -1,0 +1,10 @@
+DROP TRIGGER IF EXISTS deployments_configuration_revision_active_trg ON deployments;
+DROP FUNCTION IF EXISTS record_deployed_configuration_revision();
+DROP TABLE IF EXISTS environment_operation_group_items;
+DROP TABLE IF EXISTS environment_operation_groups;
+DROP TABLE IF EXISTS service_configuration_revisions;
+DROP TABLE IF EXISTS environment_configuration_revisions;
+ALTER TABLE deployment_config_snapshots DROP COLUMN IF EXISTS configuration_revision;
+ALTER TABLE deployments DROP COLUMN IF EXISTS configuration_revision;
+ALTER TABLE environment_changesets DROP COLUMN IF EXISTS applied_configuration_revision;
+DELETE FROM schema_migrations WHERE version = 70;

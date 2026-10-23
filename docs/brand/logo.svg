@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title desc">
+  <title id="title">Midnight logo</title>
+  <desc id="desc">A dark square with a crescent moon mark and horizon line.</desc>
+  <rect width="256" height="256" rx="48" fill="#0b1020"/>
+  <circle cx="122" cy="112" r="58" fill="#f5f7ff"/>
+  <circle cx="148" cy="98" r="58" fill="#0b1020"/>
+  <path d="M64 184h128" stroke="#8bb7ff" stroke-width="12" stroke-linecap="round"/>
+</svg>

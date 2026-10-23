@@ -1,0 +1,193 @@
+name: doctor-vm-ec2
+
+# Disposable-VM CI harness for `v0.1.0-alpha` exit criterion 0.1-EC2:
+#
+#   "Fresh Debian 12 VM → `midnight doctor` passes in <10 min"
+#   (agile/RELEASE_PLAN.md §2.1)
+#
+# This workflow closes Blocker (1) of the v0.1.0-alpha greenlight
+# brief (agile/handoff/governance/V010_ALPHA_GREENLIGHT_BRIEF.md §4)
+# for Debian 12. GitHub-hosted runners do NOT offer a debian-12
+# image, so we evaluated three strategies (documented per the
+# Blocker 1 charter):
+#
+#   (i)   runs-on: ubuntu-24.04 + a `debian:12-slim` Docker container
+#         with --privileged --cgroupns=host -v
+#         /sys/fs/cgroup:/sys/fs/cgroup. Pros: no infra setup, fast
+#         cold start, fits the <10 min budget. Cons: container ≠ VM;
+#         the runner's host kernel is shared, so cgroup-v1 refusal
+#         cannot be exercised "on real hardware" — we drive it
+#         through the existing fixture seam instead.
+#
+#   (ii)  Use lima/qemu to spawn a Debian 12 VM image inside the
+#         runner. Pros: real VM. Cons: 5-10 min boot overhead pushes
+#         against the <10 min budget; flake risk on cold cache.
+#
+#   (iii) Cloud-init via Hetzner / DigitalOcean / Equinix as a self-
+#         hosted runner. Pros: real VM with predictable specs.
+#         Cons: provisioning + custody story not in scope for the
+#         alpha greenlight floor.
+#
+# CHOICE: (i). Documented limitation: the container's kernel is the
+# runner's kernel (Linux 6.x with cgroup v2 unified hierarchy), so
+# the cgroup-v1 negative path is exercised via the
+# `--hostsource=fixture:internal/doctor/testdata/cgroup-v1` seam in
+# cmd/midnight-doctor — same as doctor-vm-ec1. The strategy upgrade
+# path to true VMs is tracked in the
+# `phase1-blocker1-vm-ci-followup` issue placeholder mentioned in
+# docs/runbooks/disposable-vm-doctor.md and is targeted for
+# `v0.2.0-alpha`.
+#
+# Style/structure reference: .github/workflows/release.yml + the
+# sibling .github/workflows/doctor-vm-ec1.yml. This workflow is
+# additive — it does not modify release.yml.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  DOCTOR_MAX_DURATION: 10m
+  ARTIFACT_DIR: artifacts/doctor-vm-ec2
+  # debian:12-slim is the alpha-floor pin. The
+  # phase1-blocker1-vm-ci-followup issue tracks promoting this to a
+  # versions.yaml `runners.debian12` digest pin.
+  DEBIAN_IMAGE: 'debian:12-slim'
+
+jobs:
+  doctor-vm-ec2-matrix:
+    name: doctor-vm-ec2 (${{ matrix.case }})
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: positive
+            description: 'fresh debian:12 container → all OR-CHK-DOC checks pass'
+          - case: daemon-json-conflict
+            description: 'pre-pollute /etc/docker/daemon.json with a conflicting storage-driver and assert 0.1-EC4'
+          - case: cgroup-v1-fixture
+            description: 'cgroup v1 simulation via --hostsource=fixture:internal/doctor/testdata/cgroup-v1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+          cache: true
+
+      - name: Install host-side build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential debhelper devscripts dpkg-dev jq
+
+      - name: Build host-side binaries (statically-linked, runs in container)
+        env:
+          CGO_ENABLED: '0'
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          mkdir -p dist
+          go build -trimpath -o ./dist/vm-harness     ./tools/vm-harness
+          go build -trimpath -o ./dist/midnight-doctor ./cmd/midnight-doctor
+
+      - name: Build unsigned .deb
+        if: matrix.case == 'positive'
+        run: |
+          sudo ln -sf "$(command -v go)" /usr/local/bin/go
+          make package-deb
+          mv build/deb/midnight_*_*.deb dist/
+          ls -la dist/
+
+      - name: Pull pinned Debian 12 image
+        run: docker pull ${{ env.DEBIAN_IMAGE }}
+
+      - name: Run doctor inside debian:12 — positive path
+        if: matrix.case == 'positive'
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}
+          # The container shares the runner's cgroup v2 hierarchy
+          # via --cgroupns=host so /proc/self/mountinfo reports
+          # cgroup2. We mount the workspace at /work read-write
+          # (so the harness can drop the doctor JSON + JUnit XML
+          # into the workspace artifact dir) and run the docker
+          # image's bash with -eux so any failure is loud.
+          docker run --rm \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup \
+            -v "${PWD}":/work \
+            -w /work \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e ARTIFACT_DIR=${{ env.ARTIFACT_DIR }} \
+            -e DOCTOR_MAX_DURATION=${{ env.DOCTOR_MAX_DURATION }} \
+            ${{ env.DEBIAN_IMAGE }} \
+            bash ./.github/scripts/doctor-vm-ec2-positive.sh
+
+      - name: Run doctor inside debian:12 — daemon-json-conflict (0.1-EC4)
+        if: matrix.case == 'daemon-json-conflict'
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}
+          docker run --rm \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup \
+            -v "${PWD}":/work \
+            -w /work \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e ARTIFACT_DIR=${{ env.ARTIFACT_DIR }} \
+            -e DOCTOR_MAX_DURATION=${{ env.DOCTOR_MAX_DURATION }} \
+            ${{ env.DEBIAN_IMAGE }} \
+            bash ./.github/scripts/doctor-vm-ec2-daemon-conflict.sh
+
+      - name: Run doctor inside debian:12 — cgroup-v1 fixture (0.1-EC3)
+        if: matrix.case == 'cgroup-v1-fixture'
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}
+          docker run --rm \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup \
+            -v "${PWD}":/work \
+            -w /work \
+            -e DEBIAN_FRONTEND=noninteractive \
+            -e ARTIFACT_DIR=${{ env.ARTIFACT_DIR }} \
+            -e DOCTOR_MAX_DURATION=${{ env.DOCTOR_MAX_DURATION }} \
+            ${{ env.DEBIAN_IMAGE }} \
+            bash ./.github/scripts/doctor-vm-ec2-cgroup-v1.sh
+
+      - name: Capture diagnostics on failure
+        if: failure()
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}/diagnostics
+          docker run --rm \
+            -v "${PWD}":/work \
+            -w /work \
+            ${{ env.DEBIAN_IMAGE }} bash -c '
+              cp /etc/docker/daemon.json ${{ env.ARTIFACT_DIR }}/diagnostics/daemon.json 2>/dev/null || true
+              cp /var/lib/midnight/doctor-postinst.json ${{ env.ARTIFACT_DIR }}/diagnostics/doctor-postinst.json 2>/dev/null || true
+              uname -a > ${{ env.ARTIFACT_DIR }}/diagnostics/uname.txt || true
+              cat /proc/self/mountinfo > ${{ env.ARTIFACT_DIR }}/diagnostics/mountinfo.txt || true
+            ' || true
+          sudo journalctl -u docker --no-pager | tee "${{ env.ARTIFACT_DIR }}/diagnostics/runner-docker.journal" >/dev/null || true
+
+      - name: Upload artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-vm-ec2-${{ matrix.case }}
+          path: ${{ env.ARTIFACT_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  doctor-vm-ec2:
+    name: doctor-vm-ec2
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    needs: doctor-vm-ec2-matrix
+    steps:
+      - run: echo "doctor-vm-ec2 matrix completed"

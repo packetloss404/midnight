@@ -1,0 +1,35 @@
+[Unit]
+Description=Midnight OCI registry
+Documentation=https://github.com/midnight/midnight
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=midnight
+Group=midnight
+EnvironmentFile=-/etc/midnight/midnight.env
+Environment=REGISTRY_STORAGE_FILESYSTEM_ROOTDIRECTORY=/var/lib/midnight/registry
+# Keep in sync with MIDNIGHT_REGISTRY_ADDR and deploy/debian/registry.yml.
+Environment=REGISTRY_HTTP_ADDR=127.0.0.1:5000
+ExecStart=/usr/bin/midnight-registry serve --registry ${MIDNIGHT_REGISTRY_BIN} --config ${MIDNIGHT_REGISTRY_CONFIG}
+ExecStartPost=/usr/bin/midnight-doctor wait --tcp ${MIDNIGHT_REGISTRY_ADDR} --timeout 45s
+TimeoutStartSec=75s
+Restart=on-failure
+RestartSec=5s
+StateDirectory=midnight
+LogsDirectory=midnight
+RuntimeDirectory=midnight
+# midnight-buildkit nests its socket at /run/midnight/buildkit, inside the
+# directory this unit owns. Without this, restarting this unit deletes
+# /run/midnight and destroys that socket, after which every source build
+# fails with an unexplained "buildctl solve failed: exit status 1" while
+# buildkitd keeps running on an unlinked inode.
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

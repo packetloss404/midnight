@@ -1,0 +1,120 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-next:
+    name: build web-next
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+      - run: npm ci
+        working-directory: web-next
+      - run: npm run build
+        working-directory: web-next
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: midnight-web-next
+          path: web-next/dist
+          if-no-files-found: error
+          retention-days: 1
+
+  build-matrix:
+    name: build (${{ matrix.goos }}, ${{ matrix.goarch }})
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    # midnight-server embeds the console, so the console must exist before the
+    # Go build runs. Reuse the bundle the web-next job already produced instead
+    # of building it once per matrix leg.
+    needs: web-next
+    strategy:
+      matrix:
+        goos: [linux]
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - uses: actions/setup-node@v4
+        if: github.event_name == 'pull_request'
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+      - name: Build console bundle for pull request
+        if: github.event_name == 'pull_request'
+        run: |
+          npm ci --prefix web-next
+          npm --prefix web-next run build
+          cp -a web-next/dist/. internal/api/webdist/
+      - name: Download console bundle
+        if: github.event_name != 'pull_request'
+        uses: actions/download-artifact@v4
+        with:
+          name: midnight-web-next
+          path: internal/api/webdist
+      - name: Verify console bundle is staged for go:embed
+        run: |
+          test -f internal/api/webdist/index.html || {
+            echo "::error::internal/api/webdist/index.html is missing; midnight-server would ship without its console" >&2
+            exit 1
+          }
+      - name: Build binaries
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: '0'
+        run: |
+          mkdir -p "dist/${GOOS}-${GOARCH}"
+          go build -trimpath -buildvcs=false -o "dist/${GOOS}-${GOARCH}/midnight-server" ./cmd/midnight-server
+          go build -trimpath -buildvcs=false -o "dist/${GOOS}-${GOARCH}/midnight-worker" ./cmd/midnight-worker
+          go build -trimpath -buildvcs=false -o "dist/${GOOS}-${GOARCH}/midnight-agent" ./cmd/midnight-agent
+          go build -trimpath -buildvcs=false -o "dist/${GOOS}-${GOARCH}/midnight" ./cmd/midnight
+          go build -trimpath -buildvcs=false -o "dist/${GOOS}-${GOARCH}/midnight-buildkit" ./cmd/midnight-buildkit
+          go build -trimpath -buildvcs=false -o "dist/${GOOS}-${GOARCH}/midnight-registry" ./cmd/midnight-registry
+          go build -trimpath -buildvcs=false -o "dist/${GOOS}-${GOARCH}/midnight-recovery" ./cmd/midnight-recovery
+      - name: Verify midnight-server carries the console
+        run: |
+          # The embedded bundle must survive the compile: grep the binary for a
+          # hashed asset name emitted by the console build.
+          asset_path="$(find internal/api/webdist/assets -maxdepth 1 -type f -name 'index-*.js' -print -quit)"
+          if [ -z "$asset_path" ]; then
+            echo "::error::console build did not emit an index JavaScript asset" >&2
+            exit 1
+          fi
+          asset="$(basename "$asset_path")"
+          grep -q -- "$asset" "dist/${{ matrix.goos }}-${{ matrix.goarch }}/midnight-server" || {
+            echo "::error::midnight-server does not contain $asset; the console was not embedded" >&2
+            exit 1
+          }
+      - uses: actions/upload-artifact@v4
+        if: github.event_name != 'pull_request'
+        with:
+          name: midnight-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/${{ matrix.goos }}-${{ matrix.goarch }}
+          retention-days: 1
+
+  build:
+    name: build
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    needs: [build-matrix, web-next]
+    steps:
+      - run: echo "build matrix completed"

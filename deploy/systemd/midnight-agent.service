@@ -1,0 +1,23 @@
+[Unit]
+Description=Midnight agent
+Documentation=https://github.com/midnight/midnight
+After=network-online.target containerd.service docker.service midnight-server.service
+Requires=docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/etc/midnight/midnight.env
+ExecStart=/usr/bin/midnight-agent
+Restart=on-failure
+RestartSec=5s
+StateDirectory=midnight/agent
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

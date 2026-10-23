@@ -1,0 +1,56 @@
+Midnight Debian package notes
+=============================
+
+This alpha package installs service units and configuration defaults, then runs
+`midnight-doctor --json --install-readiness --live` and writes the first report
+to `/var/lib/midnight/doctor-postinst.json`. That report is explicitly labeled
+`profile=install-readiness` and does not claim host preflight checks ran. Doctor
+warnings do not fail package configuration; fatal or configuration errors do.
+The package does not enable services automatically.
+
+Operational paths:
+
+- Configuration: /etc/midnight
+- State: /var/lib/midnight
+- Shared `midnight up` source staging: /var/lib/midnight/uploads
+- Logs: /var/log/midnight
+- Runtime sockets: /run/midnight
+- Traefik dynamic routes: /etc/midnight/traefik/dynamic
+
+The package should create a locked system account named `midnight` for services
+that do not require root privileges. For the Phase 0 single-server Docker
+runtime, `midnight-worker.service` also joins the `docker` group; Docker API
+access is host-root equivalent and should be limited to trusted self-hosted
+operators.
+
+Before enabling services:
+
+1. Configure `MIDNIGHT_DB_DSN` or write a one-line DSN to
+   `/etc/midnight/db.dsn` with mode `0640` and group `midnight`.
+2. Confirm `/etc/midnight/cursor.key`,
+   `/etc/midnight/automation-token.key`, `/etc/midnight/invitation.key`,
+   `/etc/midnight/variable-intent.key`, `/etc/midnight/kek`, and
+   `/etc/midnight/registry.yml` exist. The installer also writes a generated
+   `MIDNIGHT_API_BEARER_TOKEN` and an independent
+   a local agent credential plus `/etc/midnight/agent-credentials.json`; the
+   operator recovery bearer is not available to runtime-agent requests.
+3. Install or configure `buildkitd`, `buildctl`, and `registry` paths in
+   `/etc/midnight/midnight.env`.
+4. Replace the packaged route placeholder host (`app.example.invalid`) with the
+   generated host or apps-domain host that should receive traffic. Keep
+   `MIDNIGHT_WORKER_ROUTE_PUBLIC_TLS=false` for HTTP-only proof runs; set it to
+   `true` only with a matching Traefik cert resolver.
+5. Confirm `MIDNIGHT_WORKER_RUNTIME_BACKEND=docker` and
+   `MIDNIGHT_WORKER_ROUTE_CONFIG_DIR=/etc/midnight/traefik/dynamic` unless using
+   an explicit non-default install layout.
+6. Configure image trust before deploying. For production, set
+   `MIDNIGHT_WORKER_VERIFY_SIGNATURES=true`, `MIDNIGHT_WORKER_COSIGN_BINARY_PATH`,
+   and either `MIDNIGHT_WORKER_COSIGN_PUBLIC_KEY` or the keyless certificate
+   identity/issuer fields. For tightly controlled acceptance runs only, set
+   `MIDNIGHT_WORKER_TRUSTED_IMAGES` to comma-separated immutable image refs.
+7. Rerun `midnight-doctor --json --live` with explicit host fixtures/hints as described
+   in `/usr/share/midnight/runbooks/disposable-vm-doctor.md` and the repository
+   `docs/doctor/checks.md`.
+8. Enable units with `systemctl enable --now midnight-server midnight-worker
+   midnight-agent midnight-buildkit midnight-buildkit-worker
+   midnight-registry` only after fatal checks pass.

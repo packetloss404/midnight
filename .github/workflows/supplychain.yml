@@ -1,0 +1,64 @@
+name: supplychain
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.3.0 -test -tags=integration ./...
+
+  osv-scanner:
+    name: osv-scanner (${{ matrix.lockfile }})
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    strategy:
+      matrix:
+        include:
+          - lockfile: go.mod
+            allow_empty: ''
+          - lockfile: web-next/package-lock.json
+            allow_empty: ''
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - name: Run osv-scanner
+        run: go run github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.3.3 scan source ${{ matrix.allow_empty }} --lockfile="${{ matrix.lockfile }}"
+
+  npm-audit:
+    name: npm-audit (${{ matrix.directory }})
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    strategy:
+      matrix:
+        directory: [web-next]
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: ${{ matrix.directory }}/package-lock.json
+      - run: npm ci
+      - run: npm audit --omit=dev

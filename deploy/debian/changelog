@@ -1,0 +1,82 @@
+midnight (0.1.0~alpha-6) jammy bookworm; urgency=medium
+
+  * Add tenant-safe environment Apply and Deploy with monotonic configuration
+    revisions, per-service deployment impact, operation groups, and exact
+    idempotent replay.
+  * Distinguish source rebuilds from immutable-image redeploys, preserve exact
+    rollback and cancellation truth, and reauthorize grouped activity reads.
+  * Replace the multi-step draft experience with a reviewed Changes journey,
+    live deployment activity, compact service state, setup resume, and
+    searchable configuration and resource creation.
+  * Extend keyboard, 320-pixel responsive, forced-color, reduced-motion, and
+    automated accessibility coverage for the project workspace.
+  * This private maintenance artifact remains unsigned; the protected release
+    signing workflow is still required before public distribution.
+
+ -- Midnight Maintainers <packages@midnight.local>  Tue, 01 Sep 2026 02:50:56 -0500
+
+midnight (0.1.0~alpha-5) jammy bookworm; urgency=medium
+
+  * Advance the embedded database schema to version 60 with a checksum-safe
+    replacement for the migration-59 count-admission trigger function.
+  * Restore service and environment resource updates while preserving
+    workspace limits, soft-delete restoration checks, and cross-workspace
+    admission behavior.
+  * This private maintenance artifact remains unsigned; the protected release
+    signing workflow is still required before public distribution.
+
+ -- Midnight Maintainers <packages@midnight.local>  Sun, 30 Aug 2026 17:16:41 -0500
+
+midnight (0.1.0~alpha-4) jammy bookworm; urgency=medium
+
+  * Keep the authenticator-code field visible before the first sign-in request
+    so MFA-enabled accounts can submit password and TOTP in one pass without
+    weakening server-side credential-enumeration protections.
+  * Add a human-session generated-domain acceptance mode with redacted,
+    scoped route and ingress evidence.
+  * Add provider-independent, commit-bound CI evidence and an explicit
+    dedicated-runner continuity path for hosted-runner outages.
+  * This private maintenance artifact remains unsigned; the protected release
+    signing workflow is still required before public distribution.
+
+ -- Midnight Maintainers <packages@midnight.local>  Sun, 30 Aug 2026 16:58:30 -0500
+
+midnight (0.1.0~alpha-3) jammy bookworm; urgency=medium
+
+  * Package the reviewed maintenance fixes from one clean source commit while
+    keeping the product version at 0.1.0-alpha.
+  * Record the full source commit and commit time in every binary's Go build
+    metadata, and expose the same identity through server compatibility data.
+  * Retain the generated dbgsym package beside the Debian changes manifest so
+    the recorded artifact set is complete and independently verifiable.
+  * Replace the retired Docker v28 Go SDK with the supported Moby API/client
+    modules and require go-archive 0.3.3, closing GO-2026-6253 without a
+    vulnerability exception.
+  * This private maintenance artifact remains unsigned; the protected release
+    signing workflow is still required before public distribution.
+
+ -- Midnight Maintainers <packages@midnight.local>  Sat, 29 Aug 2026 11:37:40 -0500
+
+midnight (0.1.0~alpha-2) jammy bookworm; urgency=medium
+
+  * Rebuild all shipped Go binaries with the repository's reviewed Go
+    1.25.14 toolchain, incorporating the current net/http fixes.
+  * Refresh the package payload from the current release candidate so
+    installed files have a single, versioned package provenance boundary.
+  * This local maintenance artifact remains unsigned; the protected release
+    signing workflow is required before publishing it as a public release.
+
+ -- Midnight Maintainers <packages@midnight.local>  Sat, 29 Aug 2026 15:49:42 +0000
+
+midnight (0.1.0~alpha-1) jammy bookworm; urgency=low
+
+  * Initial Phase 1 alpha packaging.
+  * Live `midnight doctor` with stable OR-CHK-DOC-001..013 ids
+    (001..009 remain the disposable-host harness floor).
+  * Bootstrap admin first-login MFA flow (TOTP RFC 6238).
+  * Phase 1 schema 0001..0008.
+  * The .deb is unsigned in this release; public signed artifacts remain
+    gated on the release-key custody decision (P0-D004,
+    `RELEASE_KEY_CUSTODY.md`).
+
+ -- Midnight Maintainers <packages@midnight.local>  Mon, 27 Apr 2026 14:00:00 +0000

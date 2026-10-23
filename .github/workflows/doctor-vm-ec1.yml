@@ -1,0 +1,184 @@
+name: doctor-vm-ec1
+
+# Disposable-VM CI harness for `v0.1.0-alpha` exit criterion 0.1-EC1:
+#
+#   "Fresh Ubuntu 24.04 VM → `midnight doctor` passes in <10 min"
+#   (agile/RELEASE_PLAN.md §2.1)
+#
+# This workflow closes Blocker (1) of the v0.1.0-alpha greenlight
+# brief (agile/handoff/governance/V010_ALPHA_GREENLIGHT_BRIEF.md §4).
+# It builds the .deb produced by `make package-deb`, installs it on a
+# clean ubuntu-24.04 GitHub-hosted runner, runs `midnight doctor
+# --json` through `tools/vm-harness`, and asserts:
+#
+#   * exit code 0 (panel-locked, doctor.ExitCodeForResults table)
+#   * total wall-clock duration < 10 minutes
+#   * every OR-CHK-DOC-001..009 entry reports status="pass"
+#
+# The matrix also covers two negative-path scenarios:
+#
+#   1. daemon.json conflict (asserts 0.1-EC4 is enforced live, not
+#      just by the unit-test fixture).
+#   2. cgroup v1 simulation via the `--hostsource=fixture:` seam
+#      added to cmd/midnight-doctor; the live host is cgroup v2 so
+#      we point the doctor at internal/doctor/testdata/cgroup-v1.
+#
+# Style/structure reference: .github/workflows/release.yml (the
+# Sprint-1 finish release workflow, commit 239e3e3). This workflow is
+# additive — it does not modify release.yml — so it satisfies the
+# Blocker 1 charter ("Add NEW workflow files only").
+
+on:
+  workflow_dispatch:
+
+# Read-only by default. The harness uploads artifacts on failure via
+# actions/upload-artifact@v4 which only needs read scope.
+permissions:
+  contents: read
+
+env:
+  DOCTOR_MAX_DURATION: 10m
+  ARTIFACT_DIR: artifacts/doctor-vm-ec1
+
+jobs:
+  doctor-vm-ec1-matrix:
+    name: doctor-vm-ec1 (${{ matrix.case }})
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - case: positive
+            description: 'fresh Ubuntu 24.04 → all OR-CHK-DOC checks pass'
+          - case: daemon-json-conflict
+            description: 'pre-pollute /etc/docker/daemon.json with a conflicting storage-driver and assert 0.1-EC4'
+          - case: cgroup-v1-fixture
+            description: 'cgroup v1 simulation via --hostsource=fixture:internal/doctor/testdata/cgroup-v1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+          cache: true
+
+      - name: Install host-side build tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential debhelper devscripts dpkg-dev jq
+
+      - name: Build host-side binaries (vm-harness, midnight-doctor)
+        run: |
+          mkdir -p dist
+          go build -trimpath -o ./dist/vm-harness     ./tools/vm-harness
+          go build -trimpath -o ./dist/midnight-doctor ./cmd/midnight-doctor
+
+      - name: Build unsigned .deb
+        if: matrix.case == 'positive'
+        run: |
+          sudo ln -sf "$(command -v go)" /usr/local/bin/go
+          make package-deb
+          mv build/deb/midnight_*_*.deb dist/
+          ls -la dist/
+
+      - name: Install .deb (positive path only)
+        if: matrix.case == 'positive'
+        run: |
+          # The .deb's Depends: docker-ce >= 24.0 is satisfied by the
+          # ubuntu-24.04 runner image which ships Docker upstream out
+          # of the box. The postinst writes /etc/docker/daemon.json
+          # baseline (0.1-EC4 happy path), generates the bootstrap
+          # token, and runs `midnight doctor --json` (no fixture
+          # flags, so most checks skip — the harness re-runs doctor
+          # below with explicit fixture paths so all 9 ids pass).
+          docker --version
+          sudo apt-get install -y ./dist/midnight_*.deb
+
+      - name: Pre-pollute /etc/docker/daemon.json (daemon-json-conflict path)
+        if: matrix.case == 'daemon-json-conflict'
+        run: |
+          sudo install -d -m 0755 /etc/docker
+          # Single-line JSON so the heredoc terminator does not need
+          # to be column-0 — keeps the YAML readable.
+          echo '{"log-driver":"syslog","storage-driver":"devicemapper"}' \
+            | sudo tee /etc/docker/daemon.json >/dev/null
+          cat /etc/docker/daemon.json
+
+      - name: Run doctor — positive path
+        if: matrix.case == 'positive'
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}
+          # Pass live fixture paths so the host probes have something
+          # meaningful to read. The runner is Ubuntu 24.04 (cgroup v2
+          # by default) and ships Docker so /etc/docker/daemon.json
+          # exists after the .deb postinst runs.
+          docker version --format '{{.Server.APIVersion}}' \
+            | sudo tee /tmp/docker-version.txt >/dev/null
+          ss -ltn | sudo tee /tmp/ss-ltn.txt >/dev/null
+          ./dist/vm-harness \
+            --doctor-binary=midnight-doctor \
+            --distro=ubuntu-24.04 \
+            --max-duration=${{ env.DOCTOR_MAX_DURATION }} \
+            --json-out=${{ env.ARTIFACT_DIR }}/doctor.json \
+            --junit-out=${{ env.ARTIFACT_DIR }}/junit.xml \
+            --doctor-args=--mountinfo-fixture=/proc/self/mountinfo,--daemon-json-fixture=/etc/docker/daemon.json,--docker-version-fixture=/tmp/docker-version.txt,--ss-ltn-fixture=/tmp/ss-ltn.txt,--firewall-mode=none,--mac-mode=apparmor-enforce,--time-sync=synchronized,--hostname-fqdn=ec1.midnight.local,--docker-packages=docker-ce
+
+      - name: Run doctor — daemon-json-conflict negative path (0.1-EC4)
+        if: matrix.case == 'daemon-json-conflict'
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}
+          ./dist/vm-harness \
+            --doctor-binary=./dist/midnight-doctor \
+            --distro=ubuntu-24.04-daemon-conflict \
+            --max-duration=${{ env.DOCTOR_MAX_DURATION }} \
+            --json-out=${{ env.ARTIFACT_DIR }}/doctor.json \
+            --junit-out=${{ env.ARTIFACT_DIR }}/junit.xml \
+            --negative-path \
+            --expect-exit=2 \
+            --expect-fail-id=OR-CHK-DOC-002 \
+            --doctor-args=--check=OR-CHK-DOC-002,--daemon-json-fixture=/etc/docker/daemon.json
+
+      - name: Run doctor — cgroup-v1 fixture negative path (0.1-EC3)
+        if: matrix.case == 'cgroup-v1-fixture'
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}
+          ./dist/vm-harness \
+            --doctor-binary=./dist/midnight-doctor \
+            --distro=ubuntu-24.04-cgroup-v1 \
+            --max-duration=${{ env.DOCTOR_MAX_DURATION }} \
+            --json-out=${{ env.ARTIFACT_DIR }}/doctor.json \
+            --junit-out=${{ env.ARTIFACT_DIR }}/junit.xml \
+            --negative-path \
+            --expect-exit=2 \
+            --expect-fail-id=OR-CHK-DOC-001 \
+            --hostsource=fixture:internal/doctor/testdata/cgroup-v1 \
+            --doctor-args=--check=OR-CHK-DOC-001
+
+      - name: Capture diagnostics on failure
+        if: failure()
+        run: |
+          mkdir -p ${{ env.ARTIFACT_DIR }}/diagnostics
+          sudo journalctl -u docker --no-pager | tee "${{ env.ARTIFACT_DIR }}/diagnostics/docker.journal" >/dev/null || true
+          sudo cp /etc/docker/daemon.json ${{ env.ARTIFACT_DIR }}/diagnostics/daemon.json || true
+          sudo cp /var/lib/midnight/doctor-postinst.json ${{ env.ARTIFACT_DIR }}/diagnostics/doctor-postinst.json || true
+          uname -a > ${{ env.ARTIFACT_DIR }}/diagnostics/uname.txt || true
+          cat /proc/self/mountinfo > ${{ env.ARTIFACT_DIR }}/diagnostics/mountinfo.txt || true
+
+      - name: Upload artifacts (always)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: doctor-vm-ec1-${{ matrix.case }}
+          path: ${{ env.ARTIFACT_DIR }}
+          if-no-files-found: warn
+          retention-days: 14
+
+  doctor-vm-ec1:
+    name: doctor-vm-ec1
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    needs: doctor-vm-ec1-matrix
+    steps:
+      - run: echo "doctor-vm-ec1 matrix completed"

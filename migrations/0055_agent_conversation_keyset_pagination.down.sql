@@ -1,0 +1,11 @@
+DROP INDEX IF EXISTS idx_agent_conversations_project_service_actor_created_id_desc;
+DROP INDEX IF EXISTS idx_agent_conversations_service_actor_created_id_desc;
+DROP INDEX IF EXISTS idx_agent_conversations_project_actor_created_id_desc;
+DROP INDEX IF EXISTS idx_agent_conversations_project_service_created_id_desc;
+DROP INDEX IF EXISTS idx_agent_conversations_actor_created_id_desc;
+DROP INDEX IF EXISTS idx_agent_conversations_service_created_id_desc;
+DROP INDEX IF EXISTS idx_agent_conversations_project_created_id_desc;
+DROP INDEX IF EXISTS idx_agent_conversations_created_id_desc;
+
+DELETE FROM schema_migrations
+WHERE version = 55 AND name = 'agent_conversation_keyset_pagination';

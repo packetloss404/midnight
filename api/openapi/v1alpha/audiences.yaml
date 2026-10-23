@@ -1,0 +1,55 @@
+audiences:
+  product:
+    description: Tenant-scoped product resources used by human and project automation clients.
+    path_prefixes:
+      - /auth/sessions
+      - /auth/me
+      - /workspaces
+      - /projects
+      - /services
+      - /environments
+      - /operations
+      - /observability
+      - /usage
+      - /monitors
+      - /monitor-
+      - /invitations
+      - /variables
+      - /domains
+      - /github/setup
+      - /tcp-proxies
+      - /volumes
+      - /volume-
+      - /templates
+  operator:
+    description: Installation recovery, backup, audit, configuration, and provider administration.
+    path_prefixes:
+      - /compat
+      - /openapi.yaml
+      - /asyncapi.yaml
+      - /auth/claim
+      - /auth/password-reset
+      - /backup
+      - /webhooks
+      - /webhook-deliveries
+      - /github/installations
+      - /config
+      - /audit
+      - /enterprise
+      - /billing
+      - /isolation
+      - /instance
+      - /networking
+      - /control-plane
+      - /release
+      - /_demo
+  agent:
+    description: Host-agent registration, desired state, heartbeat, and status reporting.
+    path_prefixes:
+      - /agents
+  ui:
+    description: Dashboard-specific aggregation and presentation endpoints.
+    path_prefixes:
+      - /dashboard
+      - /agent/conversations
+      - /usage

@@ -1,0 +1,28 @@
+[Unit]
+Description=Midnight BuildKit daemon
+Documentation=https://github.com/midnight/midnight
+After=network-online.target containerd.service docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+EnvironmentFile=-/etc/midnight/midnight.env
+ExecStart=/usr/bin/midnight-buildkit serve --buildkitd ${MIDNIGHT_BUILDKITD_BIN} --addr ${MIDNIGHT_BUILDKIT_ADDR} --root ${MIDNIGHT_BUILDKIT_ROOT}
+ExecStartPost=/usr/bin/midnight-doctor wait --unix ${MIDNIGHT_BUILDKIT_ADDR} --timeout 45s
+TimeoutStartSec=75s
+Restart=on-failure
+RestartSec=5s
+StateDirectory=midnight/buildkit
+RuntimeDirectory=midnight/buildkit
+# Shares the /run/midnight parent with the server, worker and registry
+# units; preserving it keeps a sibling restart from removing this socket.
+RuntimeDirectoryPreserve=yes
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

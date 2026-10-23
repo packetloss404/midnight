@@ -1,0 +1,66 @@
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: lint
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - name: Check gofmt
+        run: test -z "$(gofmt -l cmd internal pkg tools)"
+      - name: go vet
+        run: go vet ./...
+      - name: scaffold guard
+        run: go run ./tools/lint
+      - name: Shell scripts
+        run: |
+          bash -n scripts/*.sh scripts/dev/*.sh packaging/release/*.sh .github/scripts/*.sh \
+            deploy/debian/postinst deploy/debian/postrm deploy/debian/prerm
+          shellcheck -S warning scripts/*.sh scripts/dev/*.sh packaging/release/*.sh \
+            .github/scripts/*.sh deploy/debian/postinst deploy/debian/postrm deploy/debian/prerm
+
+  workflow-lint:
+    name: workflow-lint
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - name: actionlint
+        run: |
+          set -euo pipefail
+          go install github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          actionlint
+
+  web-next:
+    name: web-next typecheck
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+      - run: npm ci
+        working-directory: web-next
+      - run: npm run typecheck
+        working-directory: web-next

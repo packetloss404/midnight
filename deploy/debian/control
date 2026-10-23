@@ -1,0 +1,54 @@
+Source: midnight
+Section: admin
+Priority: optional
+Maintainer: Midnight Maintainers <packages@midnight.local>
+Build-Depends: debhelper-compat (= 13), golang-1.25 | golang-go (>= 2:1.25~), nodejs (>= 20), npm (>= 10)
+Standards-Version: 4.6.2
+Homepage: https://github.com/midnight/midnight
+Vcs-Git: https://github.com/midnight/midnight.git
+Rules-Requires-Root: binary-targets
+
+Package: midnight
+Architecture: amd64 arm64
+Depends:
+ ${shlibs:Depends},
+ ${misc:Depends},
+ systemd (>= 245),
+ docker-ce (>= 5:24.0~) | docker-ce (>= 5:25.0~) | docker-ce (>= 5:26.0~) | docker-ce (>= 5:27.0~) | docker-ce (>= 5:28.0~),
+ adduser,
+ ca-certificates,
+ jq,
+ postgresql-client
+Recommends:
+ chrony | ntp | systemd-timesyncd,
+ ufw | firewalld | nftables,
+ apparmor
+Suggests:
+ prometheus-node-exporter,
+ buildkit,
+ docker-registry
+Breaks:
+ docker.io,
+ docker-engine,
+ midnight (<< 0.0.0~),
+ midnight (>> 0.2.99~)
+Replaces:
+ midnight (<< 0.1.0~)
+Description: Midnight self-hostable Railway-style PaaS — alpha
+ Midnight is an open-source application platform that targets parity with
+ Railway's "deploy from a repo, get an HTTPS subdomain" workflow on a
+ single Ubuntu 24.04 / Debian 12 host.
+ .
+ This package installs the control plane (midnight-server, midnight-worker),
+ the host agent (midnight-agent), and Midnight's wrapper units for BuildKit
+ (midnight-buildkit) and the OCI registry (midnight-registry). The BuildKit
+ daemon and registry executable are external pinned binaries configured in
+ /etc/midnight/midnight.env; distro packages are suggested for operators who
+ intentionally override those paths. All six units are disabled by default;
+ the operator enables them after `midnight doctor` reports green.
+ The package also installs the offline `midnight-recovery` backup and disaster
+ restore utility; it is not a systemd service.
+ .
+ Phase 0 / Phase 1 alpha. Not for public-internet production workloads.
+ The supported upgrade window is encoded in the Depends/Breaks fields:
+ skip-version upgrades are refused by `midnight upgrade-plan`.

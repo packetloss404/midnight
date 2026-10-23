@@ -1,0 +1,44 @@
+# Traefik static configuration for the Midnight local dev stack.
+# Mounted read-only at /etc/traefik/traefik.yml by docker-compose.local.yml.
+#
+# The file provider watches /etc/traefik/dynamic, which the deploy worker writes
+# generated route files into (when MIDNIGHT_WORKER_ROUTE_CONFIG_DIR is enabled).
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+entryPoints:
+  web:
+    address: ":80"
+  websecure:
+    address: ":443"
+  traefik:
+    address: ":8080"
+
+api:
+  dashboard: true
+  insecure: true
+
+ping:
+  entryPoint: traefik
+
+providers:
+  file:
+    directory: /etc/traefik/dynamic
+    watch: true
+
+certificatesResolvers:
+  local:
+    acme:
+      email: local-dev@midnight.invalid
+      storage: /etc/traefik/acme/acme.json
+      tlsChallenge: {}
+
+log:
+  level: INFO
+
+accessLog:
+  format: json
+  filePath: /var/log/midnight/traefik/access.jsonl
+  # Flush each completed request so durable tailing is useful during deploys.
+  bufferingSize: 0

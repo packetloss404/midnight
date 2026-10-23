@@ -1,0 +1,290 @@
+schema_version: 72
+migrations:
+  - version: 1
+    name: alpha_core
+    up: 0001_alpha_core.up.sql
+    down: 0001_alpha_core.down.sql
+  - version: 2
+    name: environment_locks
+    up: 0002_environment_locks.up.sql
+    down: 0002_environment_locks.down.sql
+  - version: 3
+    name: artifact_promotions
+    up: 0003_artifact_promotions.up.sql
+    down: 0003_artifact_promotions.down.sql
+  - version: 4
+    name: agents
+    up: 0004_agents.up.sql
+    down: 0004_agents.down.sql
+  - version: 5
+    name: webhook_deliveries
+    up: 0005_webhook_deliveries.up.sql
+    down: 0005_webhook_deliveries.down.sql
+  - version: 6
+    name: audit_chain_columns
+    up: 0006_audit_chain_columns.up.sql
+    down: 0006_audit_chain_columns.down.sql
+  - version: 7
+    name: bootstrap_admin
+    up: 0007_bootstrap_admin.up.sql
+    down: 0007_bootstrap_admin.down.sql
+  - version: 8
+    name: volumes
+    up: 0008_volumes.up.sql
+    down: 0008_volumes.down.sql
+  - version: 9
+    name: queue_parent_operation_id
+    up: 0009_queue_parent_operation_id.up.sql
+    down: 0009_queue_parent_operation_id.down.sql
+  - version: 10
+    name: variable_references
+    up: 0010_variable_references.up.sql
+    down: 0010_variable_references.down.sql
+  - version: 11
+    name: service_github_index
+    up: 0011_service_github_index.up.sql
+    down: 0011_service_github_index.down.sql
+  - version: 12
+    name: agent_revoked_sessions
+    up: 0012_agent_revoked_sessions.up.sql
+    down: 0012_agent_revoked_sessions.down.sql
+  - version: 13
+    name: agent_conversations
+    up: 0013_agent_conversations.up.sql
+    down: 0013_agent_conversations.down.sql
+  - version: 14
+    name: canonical_deployments
+    up: 0014_canonical_deployments.up.sql
+    down: 0014_canonical_deployments.down.sql
+  - version: 15
+    name: backfill_deployments
+    up: 0015_backfill_deployments.up.sql
+    down: 0015_backfill_deployments.down.sql
+  - version: 16
+    name: deployment_fsm_trigger
+    up: 0016_deployment_fsm_trigger.up.sql
+    down: 0016_deployment_fsm_trigger.down.sql
+  - version: 17
+    name: active_environment_lock_uniqueness
+    up: 0017_active_environment_lock_uniqueness.up.sql
+    down: 0017_active_environment_lock_uniqueness.down.sql
+  - version: 18
+    name: resource_scope_integrity
+    up: 0018_resource_scope_integrity.up.sql
+    down: 0018_resource_scope_integrity.down.sql
+  - version: 19
+    name: deploy_intake_outbox
+    up: 0019_deploy_intake_outbox.up.sql
+    down: 0019_deploy_intake_outbox.down.sql
+  - version: 20
+    name: service_variable_metadata
+    up: 0020_service_variable_metadata.up.sql
+    down: 0020_service_variable_metadata.down.sql
+  - version: 21
+    name: volume_runtime_lifecycle
+    up: 0021_volume_runtime_lifecycle.up.sql
+    down: 0021_volume_runtime_lifecycle.down.sql
+  - version: 22
+    name: durable_http_routing
+    up: 0022_durable_http_routing.up.sql
+    down: 0022_durable_http_routing.down.sql
+  - version: 23
+    name: service_environment_configs
+    up: 0023_service_environment_configs.up.sql
+    down: 0023_service_environment_configs.down.sql
+  - version: 24
+    name: variable_lifecycle
+    up: 0024_variable_lifecycle.up.sql
+    down: 0024_variable_lifecycle.down.sql
+  - version: 25
+    name: staged_work_outbox
+    up: 0025_staged_work_outbox.up.sql
+    down: 0025_staged_work_outbox.down.sql
+  - version: 26
+    name: public_networking_evidence
+    up: 0026_public_networking_evidence.up.sql
+    down: 0026_public_networking_evidence.down.sql
+  - version: 27
+    name: volume_backup_execution
+    up: 0027_volume_backup_execution.up.sql
+    down: 0027_volume_backup_execution.down.sql
+  - version: 28
+    name: observability
+    up: 0028_observability.up.sql
+    down: 0028_observability.down.sql
+  - version: 29
+    name: deployment_runtime_actions
+    up: 0029_deployment_runtime_actions.up.sql
+    down: 0029_deployment_runtime_actions.down.sql
+  - version: 30
+    name: deployment_predeploy_runs
+    up: 0030_deployment_predeploy_runs.up.sql
+    down: 0030_deployment_predeploy_runs.down.sql
+  - version: 31
+    name: builtin_monitors
+    up: 0031_builtin_monitors.up.sql
+    down: 0031_builtin_monitors.down.sql
+  - version: 32
+    name: cron_runtime_definitions
+    up: 0032_cron_runtime_definitions.up.sql
+    down: 0032_cron_runtime_definitions.down.sql
+  - version: 33
+    name: monitor_delivery_status
+    up: 0033_monitor_delivery_status.up.sql
+    down: 0033_monitor_delivery_status.down.sql
+  - version: 34
+    name: tcp_proxy_endpoints
+    up: 0034_tcp_proxy_endpoints.up.sql
+    down: 0034_tcp_proxy_endpoints.down.sql
+  - version: 35
+    name: stateless_deployment_instances
+    up: 0035_stateless_deployment_instances.up.sql
+    down: 0035_stateless_deployment_instances.down.sql
+  - version: 36
+    name: template_provision_runs
+    up: 0036_template_provision_runs.up.sql
+    down: 0036_template_provision_runs.down.sql
+  - version: 37
+    name: official_database_templates
+    up: 0037_official_database_templates.up.sql
+    down: 0037_official_database_templates.down.sql
+  - version: 38
+    name: tenant_identity_rbac
+    up: 0038_tenant_identity_rbac.up.sql
+    down: 0038_tenant_identity_rbac.down.sql
+  - version: 39
+    name: actor_scoped_idempotency
+    up: 0039_actor_scoped_idempotency.up.sql
+    down: 0039_actor_scoped_idempotency.down.sql
+  - version: 40
+    name: project_automation_tokens
+    up: 0040_project_automation_tokens.up.sql
+    down: 0040_project_automation_tokens.down.sql
+  - version: 41
+    name: identity_invitations
+    up: 0041_identity_invitations.up.sql
+    down: 0041_identity_invitations.down.sql
+  - version: 42
+    name: sensitive_idempotency_responses
+    up: 0042_sensitive_idempotency_responses.up.sql
+    down: 0042_sensitive_idempotency_responses.down.sql
+  - version: 43
+    name: identity_invitation_replacements
+    up: 0043_identity_invitation_replacements.up.sql
+    down: 0043_identity_invitation_replacements.down.sql
+  - version: 44
+    name: operation_deployment_lineage
+    up: 0044_operation_deployment_lineage.up.sql
+    down: 0044_operation_deployment_lineage.down.sql
+  - version: 45
+    name: source_artifacts
+    up: 0045_source_artifacts.up.sql
+    down: 0045_source_artifacts.down.sql
+  - version: 46
+    name: source_artifact_upload_quotas
+    up: 0046_source_artifact_upload_quotas.up.sql
+    down: 0046_source_artifact_upload_quotas.down.sql
+  - version: 47
+    name: operation_cancellation
+    up: 0047_operation_cancellation.up.sql
+    down: 0047_operation_cancellation.down.sql
+  - version: 48
+    name: deployment_route_intents
+    up: 0048_deployment_route_intents.up.sql
+    down: 0048_deployment_route_intents.down.sql
+  - version: 49
+    name: github_source_links
+    up: 0049_github_source_links.up.sql
+    down: 0049_github_source_links.down.sql
+  - version: 50
+    name: durable_webhook_inbox
+    up: 0050_durable_webhook_inbox.up.sql
+    down: 0050_durable_webhook_inbox.down.sql
+  - version: 51
+    name: tenant_variable_scope_integrity
+    up: 0051_tenant_variable_scope_integrity.up.sql
+    down: 0051_tenant_variable_scope_integrity.down.sql
+  - version: 52
+    name: multi_route_domain_resources
+    up: 0052_multi_route_domain_resources.up.sql
+    down: 0052_multi_route_domain_resources.down.sql
+  - version: 53
+    name: tenant_custom_domains
+    up: 0053_tenant_custom_domains.up.sql
+    down: 0053_tenant_custom_domains.down.sql
+  - version: 54
+    name: operation_keyset_pagination
+    up: 0054_operation_keyset_pagination.up.sql
+    down: 0054_operation_keyset_pagination.down.sql
+  - version: 55
+    name: agent_conversation_keyset_pagination
+    up: 0055_agent_conversation_keyset_pagination.up.sql
+    down: 0055_agent_conversation_keyset_pagination.down.sql
+  - version: 56
+    name: human_instance_admin
+    up: 0056_human_instance_admin.up.sql
+    down: 0056_human_instance_admin.down.sql
+  - version: 57
+    name: environment_changesets
+    up: 0057_environment_changesets.up.sql
+    down: 0057_environment_changesets.down.sql
+  - version: 58
+    name: topology_layouts
+    up: 0058_topology_layouts.up.sql
+    down: 0058_topology_layouts.down.sql
+  - version: 59
+    name: usage_limits
+    up: 0059_usage_limits.up.sql
+    down: 0059_usage_limits.down.sql
+  - version: 60
+    name: usage_limit_trigger_scope_repair
+    up: 0060_usage_limit_trigger_scope_repair.up.sql
+    down: 0060_usage_limit_trigger_scope_repair.down.sql
+  - version: 61
+    name: github_commit_status_outbox
+    up: 0061_github_commit_status_outbox.up.sql
+    down: 0061_github_commit_status_outbox.down.sql
+  - version: 62
+    name: project_audit_pagination
+    up: 0062_project_audit_pagination.up.sql
+    down: 0062_project_audit_pagination.down.sql
+  - version: 63
+    name: dns_record_ownerships
+    up: 0063_dns_record_ownerships.up.sql
+    down: 0063_dns_record_ownerships.down.sql
+  - version: 64
+    name: github_app_setup_states
+    up: 0064_github_app_setup_states.up.sql
+    down: 0064_github_app_setup_states.down.sql
+  - version: 65
+    name: github_pull_request_previews
+    up: 0065_github_pull_request_previews.up.sql
+    down: 0065_github_pull_request_previews.down.sql
+  - version: 66
+    name: github_preview_reopen_ttl
+    up: 0066_github_preview_reopen_ttl.up.sql
+    down: 0066_github_preview_reopen_ttl.down.sql
+  - version: 67
+    name: community_template_forks
+    up: 0067_community_template_forks.up.sql
+    down: 0067_community_template_forks.down.sql
+  - version: 68
+    name: multi_resource_changesets
+    up: 0068_multi_resource_changesets.up.sql
+    down: 0068_multi_resource_changesets.down.sql
+  - version: 69
+    name: usage_reconciliation_reservations
+    up: 0069_usage_reconciliation_reservations.up.sql
+    down: 0069_usage_reconciliation_reservations.down.sql
+  - version: 70
+    name: changeset_apply_deploy_groups
+    up: 0070_changeset_apply_deploy_groups.up.sql
+    down: 0070_changeset_apply_deploy_groups.down.sql
+  - version: 71
+    name: service_deletion
+    up: 0071_service_deletion.up.sql
+    down: 0071_service_deletion.down.sql
+  - version: 72
+    name: instance_domain_settings
+    up: 0072_instance_domain_settings.up.sql
+    down: 0072_instance_domain_settings.down.sql

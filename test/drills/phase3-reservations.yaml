@@ -1,0 +1,55 @@
+version: 1
+owner: S08
+sprint: Phase 0 Beta Sprint B7
+capability: phase3 host drill reservations
+local-only: true
+source-manifest: test/drills/manifest.yaml
+reservations:
+  - id: D-20
+    status: reserved
+    domain: networking
+    carrier-id: D-08
+    carrier-reason-code: phase0.alert.conntrack-pressure
+    planned-drill: conntrack-flush-correctness
+    host-scope: runtime-host
+    execution: planner-only
+    rig: future
+    note: reserved for a future dedicated Phase 3 host drill; carried locally by D-08 until the Phase 3 rig exists
+    evidence-refs:
+      - artifacts/phase3/drills/conntrack-flush/plan.json
+  - id: D-21
+    status: reserved
+    domain: runtime_adapter
+    carrier-id: D-06
+    carrier-reason-code: phase0.alert.deploy-job-stuck
+    planned-drill: runtime-adapter-lease-recovery
+    host-scope: runtime-host
+    execution: planner-only
+    rig: future
+    note: reserved for a future dedicated Phase 3 host drill; carried locally by D-06 until the Phase 3 rig exists
+    evidence-refs:
+      - artifacts/phase3/drills/runtime-adapter-lease/plan.json
+  - id: D-22
+    status: reserved
+    domain: registry_cache
+    carrier-id: D-07
+    carrier-reason-code: phase0.alert.buildkit-cache-corruption
+    planned-drill: registry-cache-integrity
+    host-scope: builder-host
+    execution: planner-only
+    rig: future
+    note: reserved for a future dedicated Phase 3 host drill; carried locally by D-07 until the Phase 3 rig exists
+    evidence-refs:
+      - artifacts/phase3/drills/registry-cache-integrity/plan.json
+  - id: D-23
+    status: reserved
+    domain: volume_attach
+    carrier-id: D-14
+    carrier-reason-code: phase0.backup.destination-placeholder
+    planned-drill: volume-attach-destination-contract
+    host-scope: backup-host
+    execution: planner-only
+    rig: future
+    note: reserved for a future dedicated Phase 3 host drill; carried locally by D-14 until the Phase 3 rig exists
+    evidence-refs:
+      - artifacts/phase3/drills/volume-attach-destination/plan.json

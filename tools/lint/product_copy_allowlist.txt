@@ -1,0 +1,33 @@
+# Product-copy allowlist.
+#
+# The product-copy guard (LINT_PRODUCT_COPY_GUARD_FAILED) fails when a string a
+# person reads in the Midnight console uses implementation vocabulary:
+# operation, durable, evidence, changeset, canonical, idempotency, admitted, or
+# intake. The translation table lives in
+# docs/railway-ux-9-of-10-target-2026-09-01.md; the rule is in
+# docs/contributing/style.md.
+#
+# Every line below is one deliberate exception. Format:
+#
+#   <repo-relative path> | <exact user-visible text, whitespace collapsed>
+#
+# Entries are exact. Rewording the string retires its own exemption, and the
+# guard fails on an entry that no longer matches anything, so this file cannot
+# quietly outlive the copy it excuses.
+#
+# `#` lines are comments and blank lines are ignored. web-next/src/pages/docs/**
+# is excluded by path: the in-app documentation teaches the control-plane model,
+# so those terms are its subject rather than leaked jargon.
+
+# Technical details disclosure on the service Overview. The reader is looking at
+# a raw operation identifier returned by the API, so the API's own noun is the
+# accurate label. Both strings live inside the collapsed `Technical details`
+# block, which the 9/10 design reserves for exactly this provenance.
+web-next/src/components/panels/ServiceOverview.tsx | Operation ID
+web-next/src/components/panels/ServiceOverview.tsx | Legacy operation record
+
+# Deployment detail metadata rows. Same rationale: these render the operation id
+# and its raw finite-state-machine state next to the deployment and instance
+# ids, for copying into a support request or an API call.
+web-next/src/components/panels/DeploymentDetail.tsx | Operation
+web-next/src/components/panels/DeploymentDetail.tsx | Operation state

@@ -1,0 +1,800 @@
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Version tag (e.g., v0.1.0-alpha)'
+        required: true
+      npm_package:
+        description: 'Smoke-only npm package name; tag releases use MIDNIGHT_NPM_PACKAGE'
+        required: false
+        default: '@midnight-smoke/cli'
+
+# Hard-locked least-privilege. id-token:write is required for Sigstore
+# Fulcio's keyless flow (the OIDC token is consumed by Fulcio to mint
+# the short-lived signing cert); contents:write is required so the job
+# can attach .deb / SBOM / SLSA-style provenance artifacts to the
+# GitHub Release; attestations:write covers the SBOM / provenance
+# attachment surface. Every other permission stays at the default
+# (read-only) so a compromised step cannot push to forks or rewrite
+# protected refs. Release publication runs only for pushed v* tags;
+# workflow_dispatch is a non-publishing build smoke. Documented runbook:
+# agile/handoff/governance/
+# RELEASE_KEY_CUSTODY.md, Step 2.
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+env:
+  # COSIGN_VERSION is sourced from versions.yaml at job start
+  # (see "Resolve cosign version" step). The supply-chain pin lives
+  # in one place per agile/handoff/governance/COSIGN_SDK_BOUNDARY.md.
+  RELEASE_ARTIFACTS_DIR: artifacts/release
+  # Sigstore endpoints. Defaults are the public Sigstore deployment;
+  # Actions secrets COSIGN_REKOR_URL / COSIGN_FULCIO_URL override for
+  # private deployments. Documented in runbook Step 1.
+  COSIGN_REKOR_URL: ${{ secrets.COSIGN_REKOR_URL || 'https://rekor.sigstore.dev' }}
+  COSIGN_FULCIO_URL: ${{ secrets.COSIGN_FULCIO_URL || 'https://fulcio.sigstore.dev' }}
+  # Canonical Fulcio identity regex / OIDC issuer. Operators verify
+  # against the same values per docs/release-verify.md → "Verify the
+  # alpha release end-to-end". Single source of truth here so the
+  # signing step and the verification step cannot drift.
+  COSIGN_IDENTITY_REGEXP: '^https://github\.com/packetloss404/midnight/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+  COSIGN_OIDC_ISSUER: 'https://token.actions.githubusercontent.com'
+
+jobs:
+  build-and-sign:
+    name: build + sign + attach
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    steps:
+      - name: Checkout (full history for changelog)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Resolve release version
+        id: version
+        env:
+          DISPATCH_TAG: ${{ inputs.tag }}
+        run: |
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            tag="${GITHUB_REF_NAME}"
+          else
+            tag="${DISPATCH_TAG}"
+          fi
+          version="${tag#v}"
+          if ! [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]] || [[ "$version" == *-dev* ]]; then
+            echo "::error::refusing release version '$version': expected a non-development SemVer version"
+            exit 1
+          fi
+          {
+            echo "tag=${tag}"
+            echo "version=${version}"
+            echo "commit=$(git rev-parse --short=12 HEAD)"
+            echo "date=$(git show -s --format=%cI HEAD)"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+          cache: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+
+      - name: Install pinned GoReleaser
+        uses: goreleaser/goreleaser-action@v7
+        with:
+          distribution: goreleaser
+          version: v2.17.1
+          install-only: true
+
+      - name: Validate GoReleaser configuration
+        run: goreleaser check
+
+      # GoReleaser is the canonical producer for the standalone developer CLI
+      # archives. It does not publish directly: this workflow verifies and
+      # uploads the files alongside the separately built operator artifacts.
+      - name: Build and verify standalone CLI archives
+        id: cli-archives
+        env:
+          EXPECTED_TAG_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            goreleaser release --clean --skip=publish
+          else
+            goreleaser release --snapshot --clean
+          fi
+
+          shopt -s nullglob
+          manifests=(dist/midnight_*_SHA256SUMS)
+          if [ "${#manifests[@]}" -ne 1 ]; then
+            echo "::error::expected one CLI checksum manifest; found ${#manifests[@]}"
+            exit 1
+          fi
+          manifest=$(basename "${manifests[0]}")
+          cli_version=${manifest#midnight_}
+          cli_version=${cli_version%_SHA256SUMS}
+          if [[ "$cli_version" == *-dev* ]] || [ -z "$cli_version" ]; then
+            echo "::error::GoReleaser produced invalid development version '$cli_version'"
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "$cli_version" != "$EXPECTED_TAG_VERSION" ]; then
+            echo "::error::CLI archive version '$cli_version' does not match tag version '$EXPECTED_TAG_VERSION'"
+            exit 1
+          fi
+
+          ./packaging/release/verify-cli-archives.sh \
+            --dist dist \
+            --version "$cli_version"
+
+          mkdir -p "${{ env.RELEASE_ARTIFACTS_DIR }}"
+          archives=(dist/midnight_*.tar.gz dist/midnight_*.zip)
+          if [ "${#archives[@]}" -ne 5 ]; then
+            echo "::error::expected five standalone CLI archives; found ${#archives[@]}"
+            exit 1
+          fi
+          cp "${archives[@]}" "${manifests[0]}" "${{ env.RELEASE_ARTIFACTS_DIR }}/"
+          echo "version=$cli_version" >> "$GITHUB_OUTPUT"
+
+      - name: Resolve cosign version from versions.yaml
+        id: cosign-pin
+        run: |
+          COSIGN_VERSION=$(grep -E '^cosign:' versions.yaml | awk '{print $2}' | tr -d '"' | tr -d "'")
+          if [ -z "$COSIGN_VERSION" ]; then
+            echo "::error::cosign version missing from versions.yaml"
+            exit 1
+          fi
+          echo "COSIGN_VERSION=${COSIGN_VERSION}" >> "$GITHUB_ENV"
+          echo "Pinned cosign: ${COSIGN_VERSION}"
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Generate and verify CLI publication kit
+        env:
+          APPROVED_NPM_PACKAGE: ${{ vars.MIDNIGHT_NPM_PACKAGE }}
+          DISPATCH_NPM_PACKAGE: ${{ inputs.npm_package }}
+          CLI_VERSION: ${{ steps.cli-archives.outputs.version }}
+        run: |
+          set -euo pipefail
+          npm_package="$APPROVED_NPM_PACKAGE"
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            npm_package="$DISPATCH_NPM_PACKAGE"
+          fi
+          if [ -z "$npm_package" ]; then
+            echo "::error::MIDNIGHT_NPM_PACKAGE must name the operator-approved public package before a tag release"
+            exit 1
+          fi
+          kit_dir="${RELEASE_ARTIFACTS_DIR}/distribution"
+          go run ./tools/distribution-manifests \
+            --dist dist \
+            --out "$kit_dir" \
+            --version "$CLI_VERSION" \
+            --repository "${GITHUB_REPOSITORY}" \
+            --npm-package "$npm_package"
+
+          cp "$kit_dir/homebrew/Formula/midnight.rb" \
+            "${RELEASE_ARTIFACTS_DIR}/midnight_${CLI_VERSION}_homebrew.rb"
+          cp "$kit_dir/scoop/midnight.json" \
+            "${RELEASE_ARTIFACTS_DIR}/midnight_${CLI_VERSION}_scoop.json"
+          cp "$kit_dir/manifest.json" \
+            "${RELEASE_ARTIFACTS_DIR}/midnight_${CLI_VERSION}_distribution.json"
+
+          package_index="${RUNNER_TEMP}/midnight-npm-packages.tsv"
+          : > "$package_index"
+          while IFS= read -r package_dir; do
+            packed=$(npm pack "$package_dir" --pack-destination "${RELEASE_ARTIFACTS_DIR}" --json)
+            filename=$(node -e 'const fs=require("node:fs"); const value=JSON.parse(fs.readFileSync(0,"utf8")); process.stdout.write(value[0].filename)' <<< "$packed")
+            printf '%s\t%s\n' "$(basename "$package_dir")" "$filename" >> "$package_index"
+          done < <(find "$kit_dir/npm" -mindepth 1 -maxdepth 1 -type d | sort)
+          if [ "$(wc -l < "$package_index" | tr -d '[:space:]')" -ne 6 ]; then
+            echo "::error::expected six npm packages in the publication kit"
+            exit 1
+          fi
+
+          smoke_root="${RUNNER_TEMP}/midnight-npm-smoke"
+          mkdir -p "$smoke_root"
+          meta_archive=$(awk -F '\t' '$1 == "cli" {print $2}' "$package_index")
+          native_target=$(node -p 'process.platform + "-" + process.arch')
+          native_archive=$(awk -F '\t' -v target="$native_target" '$1 == target {print $2}' "$package_index")
+          if [ -z "$meta_archive" ] || [ -z "$native_archive" ]; then
+            echo "::error::publication kit does not contain dispatcher and ${native_target} packages"
+            exit 1
+          fi
+          npm install --prefix "$smoke_root" --ignore-scripts --no-audit --no-fund \
+            "${RELEASE_ARTIFACTS_DIR}/${meta_archive}" \
+            "${RELEASE_ARTIFACTS_DIR}/${native_archive}"
+          reported=$("$smoke_root/node_modules/.bin/midnight" version)
+          if [ "$reported" != "$CLI_VERSION" ]; then
+            echo "::error::npm-installed CLI reports '$reported'; expected '$CLI_VERSION'"
+            exit 1
+          fi
+
+          distribution_manifest="midnight_${CLI_VERSION}_DISTRIBUTION_SHA256SUMS"
+          (
+            cd "${RELEASE_ARTIFACTS_DIR}"
+            sha256sum -- *.tgz \
+              "midnight_${CLI_VERSION}_homebrew.rb" \
+              "midnight_${CLI_VERSION}_scoop.json" \
+              "midnight_${CLI_VERSION}_distribution.json"
+          ) > "${RELEASE_ARTIFACTS_DIR}/${distribution_manifest}"
+
+      - name: Sign and verify standalone CLI manifests
+        if: github.ref_type == 'tag'
+        env:
+          CLI_VERSION: ${{ steps.cli-archives.outputs.version }}
+        run: |
+          set -euo pipefail
+          for manifest in \
+            "midnight_${CLI_VERSION}_SHA256SUMS" \
+            "midnight_${CLI_VERSION}_DISTRIBUTION_SHA256SUMS"; do
+            source_path="${RELEASE_ARTIFACTS_DIR}/${manifest}"
+            bundle_path="${source_path}.sigstore.json"
+            cosign sign-blob --yes --bundle "$bundle_path" "$source_path"
+            cosign verify-blob "$source_path" \
+              --bundle "$bundle_path" \
+              --certificate-identity-regexp "$COSIGN_IDENTITY_REGEXP" \
+              --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER"
+          done
+
+      # ---------- Build the .deb ----------
+      - name: Install debhelper
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential debhelper devscripts dpkg-dev
+
+      - name: Build unsigned .deb
+        run: |
+          mkdir -p ${{ env.RELEASE_ARTIFACTS_DIR }}
+          sudo ln -sf "$(command -v go)" /usr/local/bin/go
+          make package-deb
+          mv build/deb/* ${{ env.RELEASE_ARTIFACTS_DIR }}/
+
+      - name: Assert packaged binary release metadata
+        env:
+          EXPECTED_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          expected="$EXPECTED_VERSION"
+          extract_dir="${RUNNER_TEMP}/midnight-deb"
+          mkdir -p "$extract_dir"
+          found=0
+          for package in ${{ env.RELEASE_ARTIFACTS_DIR }}/*.deb; do
+            found=1
+            rm -rf "$extract_dir/root"
+            dpkg-deb --extract "$package" "$extract_dir/root"
+            for name in midnight midnight-doctor midnight-server midnight-worker midnight-agent midnight-buildkit midnight-registry midnight-recovery; do
+              binary="$extract_dir/root/usr/bin/$name"
+              if [ ! -x "$binary" ]; then
+                echo "::error::$package is missing executable $name"
+                exit 1
+              fi
+              reported=$("$binary" version)
+              case "$reported" in
+                *-dev*)
+                  echo "::error::$name in $package reports development version '$reported'"
+                  exit 1
+                  ;;
+              esac
+              if [ "$reported" != "$expected" ]; then
+                echo "::error::$name in $package reports '$reported'; expected '$expected'"
+                exit 1
+              fi
+            done
+            bash_completion="$extract_dir/root/usr/share/bash-completion/completions/midnight"
+            zsh_completion="$extract_dir/root/usr/share/zsh/vendor-completions/_midnight"
+            fish_completion="$extract_dir/root/usr/share/fish/vendor_completions.d/midnight.fish"
+            for completion in "$bash_completion" "$zsh_completion" "$fish_completion"; do
+              if [ ! -s "$completion" ]; then
+                echo "::error::$package is missing shell completion $completion"
+                exit 1
+              fi
+            done
+            generated="$extract_dir/generated-completions"
+            mkdir -p "$generated"
+            "$extract_dir/root/usr/bin/midnight" completion bash > "$generated/midnight.bash"
+            "$extract_dir/root/usr/bin/midnight" completion zsh > "$generated/_midnight"
+            "$extract_dir/root/usr/bin/midnight" completion fish > "$generated/midnight.fish"
+            cmp "$bash_completion" "$generated/midnight.bash"
+            cmp "$zsh_completion" "$generated/_midnight"
+            cmp "$fish_completion" "$generated/midnight.fish"
+          done
+          if [ "$found" -ne 1 ]; then
+            echo "::error::no Debian package was available for metadata verification"
+            exit 1
+          fi
+
+      # debsign — gated on PM-B's release-key custody decision (P0-D004).
+      # The DEB_SIGNING_PRIVATE_KEY secret is the armored ASCII export
+      # of the YubiKey-resident GPG public key, plus (optionally) the
+      # passphrase loopback for non-YubiKey fallback. Runbook Step 5c.
+      #
+      # When the secret is unset (typical on a fork), we LEAVE the .deb
+      # unsigned so PRs from forks still pass build. The release-verify
+      # smoke step below distinguishes tag vs non-tag runs and refuses
+      # to declare success on an unsigned .deb when the workflow is
+      # running on a v* tag — that's the GREEN-floor enforcement.
+      - name: GPG-sign .deb (if release key configured)
+        id: gpg-sign
+        env:
+          DEB_SIGNING_PRIVATE_KEY: ${{ secrets.DEB_SIGNING_PRIVATE_KEY }}
+          DEB_SIGNING_PASSPHRASE: ${{ secrets.DEB_SIGNING_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          if [ -z "${DEB_SIGNING_PRIVATE_KEY:-}" ]; then
+            # Secret unset (typical on a fork or workflow_dispatch test
+            # run). The downstream release-verify step distinguishes
+            # tag vs non-tag — on a v* tag this short-circuit causes
+            # release-verify to fail because no .deb signature exists.
+            # That is the GREEN-floor fail-closed enforcement per the
+            # runbook (RELEASE_KEY_CUSTODY.md) Step 5c.
+            echo "::notice::DEB_SIGNING_PRIVATE_KEY unset; skipping debsign. Release-verify on a v* tag will fail closed."
+            exit 0
+          fi
+          # Import the public trust anchor. On the YubiKey-resident
+          # path the private material never leaves the YubiKey and
+          # debsign runs from the release manager's workstation; in CI
+          # we only verify that the import succeeds and that the key id
+          # is discoverable.
+          echo "$DEB_SIGNING_PRIVATE_KEY" | gpg --batch --import
+          KEYID=$(gpg --list-secret-keys --with-colons | awk -F: '/^sec:/ {print $5; exit}')
+          if [ -z "$KEYID" ]; then
+            # No secret key was bundled — the YubiKey-only path. The
+            # signed .changes is produced offline by the release
+            # manager and uploaded as a release attachment; in CI we
+            # short-circuit and let the workflow ship the public-key
+            # trust anchor only.
+            echo "::notice::DEB_SIGNING_PRIVATE_KEY contains a public-only export; skipping debsign in CI (YubiKey-resident signing per RELEASE_KEY_CUSTODY.md option (ii))."
+            exit 0
+          fi
+          for changes in ${{ env.RELEASE_ARTIFACTS_DIR }}/midnight_*_*.changes; do
+            debsign --re-sign -k"$KEYID" "$changes"
+          done
+
+      # ---------- Build + push + cosign-sign the OCI images ----------
+      - name: Login to GHCR
+        if: github.ref_type == 'tag'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build + push container images
+        if: github.ref_type == 'tag'
+        id: container
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_COMMIT: ${{ steps.version.outputs.commit }}
+          BUILD_DATE: ${{ steps.version.outputs.date }}
+        run: |
+          set -euo pipefail
+          tag=${{ steps.version.outputs.tag }}
+          mkdir -p "${{ env.RELEASE_ARTIFACTS_DIR }}"
+          : > "${{ env.RELEASE_ARTIFACTS_DIR }}/image-digests.txt"
+          built=0
+          for component in server worker agent buildkit registry; do
+            image="ghcr.io/${{ github.repository_owner }}/midnight-${component}:${tag}"
+            dockerfile="deploy/oci/${component}/Dockerfile"
+            if [ ! -f "$dockerfile" ]; then
+              if [ "${{ github.ref_type }}" = "tag" ]; then
+                echo "::error::Dockerfile not found for ${component}; tag releases must publish every component image"
+                exit 1
+              fi
+              echo "::warning::Dockerfile not found for ${component}; skipping"
+              continue
+            fi
+            docker build \
+              --build-arg "VERSION=${BUILD_VERSION}" \
+              --build-arg "COMMIT=${BUILD_COMMIT}" \
+              --build-arg "DATE=${BUILD_DATE}" \
+              -t "$image" -f "$dockerfile" .
+            reported=$(docker run --rm "$image" version)
+            if [ "$reported" != "$BUILD_VERSION" ]; then
+              echo "::error::${component} image reports '$reported'; expected '$BUILD_VERSION'"
+              exit 1
+            fi
+            docker push "$image"
+            digest=$(docker inspect --format='{{index .RepoDigests 0}}' "$image")
+            echo "${component}=${digest}" >> "$GITHUB_OUTPUT"
+            echo "${component}=${digest}" >> "${{ env.RELEASE_ARTIFACTS_DIR }}/image-digests.txt"
+            built=$((built + 1))
+          done
+          if [ "$built" -eq 0 ]; then
+            echo "::error::no component images were built"
+            exit 1
+          fi
+
+      - name: Build container images without publishing (dispatch smoke)
+        if: github.ref_type != 'tag'
+        env:
+          BUILD_VERSION: ${{ steps.version.outputs.version }}
+          BUILD_COMMIT: ${{ steps.version.outputs.commit }}
+          BUILD_DATE: ${{ steps.version.outputs.date }}
+        run: |
+          set -euo pipefail
+          for component in server worker agent buildkit registry; do
+            image="midnight-${component}:dispatch-smoke"
+            docker build \
+              --build-arg "VERSION=${BUILD_VERSION}" \
+              --build-arg "COMMIT=${BUILD_COMMIT}" \
+              --build-arg "DATE=${BUILD_DATE}" \
+              -t "$image" -f "deploy/oci/${component}/Dockerfile" .
+            reported=$(docker run --rm "$image" version)
+            if [ "$reported" != "$BUILD_VERSION" ]; then
+              echo "::error::${component} image reports '$reported'; expected '$BUILD_VERSION'"
+              exit 1
+            fi
+          done
+
+      - name: Cosign sign container images (keyless via Fulcio)
+        if: github.ref_type == 'tag'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          for component in server worker agent buildkit registry; do
+            case "$component" in
+              server) digest="${{ steps.container.outputs.server }}" ;;
+              worker) digest="${{ steps.container.outputs.worker }}" ;;
+              agent) digest="${{ steps.container.outputs.agent }}" ;;
+              buildkit) digest="${{ steps.container.outputs.buildkit }}" ;;
+              registry) digest="${{ steps.container.outputs.registry }}" ;;
+            esac
+            [ -z "$digest" ] && continue
+            cosign sign --yes \
+              --rekor-url "${COSIGN_REKOR_URL}" \
+              --fulcio-url "${COSIGN_FULCIO_URL}" \
+              "$digest"
+          done
+
+      # Verification asserts the just-published signature is verifiable
+      # against the canonical (identity-regexp, OIDC issuer) pair. This
+      # is the same pair operators paste from docs/release-verify.md, so
+      # if it fails here the published artifact is not deployable. We
+      # only run on tag pushes — workflow_dispatch test runs may not
+      # hit Sigstore (e.g., on a fork without the OIDC trust policy).
+      - name: Cosign verify (assert just-published signature)
+        if: github.ref_type == 'tag'
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          set -euo pipefail
+          mkdir -p "${{ env.RELEASE_ARTIFACTS_DIR }}/cosign"
+          for component in server worker agent buildkit registry; do
+            case "$component" in
+              server) digest="${{ steps.container.outputs.server }}" ;;
+              worker) digest="${{ steps.container.outputs.worker }}" ;;
+              agent) digest="${{ steps.container.outputs.agent }}" ;;
+              buildkit) digest="${{ steps.container.outputs.buildkit }}" ;;
+              registry) digest="${{ steps.container.outputs.registry }}" ;;
+            esac
+            [ -z "$digest" ] && continue
+            cosign verify \
+              --certificate-identity-regexp "${COSIGN_IDENTITY_REGEXP}" \
+              --certificate-oidc-issuer "${COSIGN_OIDC_ISSUER}" \
+              --rekor-url "${COSIGN_REKOR_URL}" \
+              --output json \
+              "$digest" > "${{ env.RELEASE_ARTIFACTS_DIR }}/cosign/${component}.verify.json"
+          done
+
+      # ---------- Promote SBOM + SLSA-style provenance ----------
+      - name: Collect SBOM + provenance artifacts
+        run: |
+          mkdir -p ${{ env.RELEASE_ARTIFACTS_DIR }}
+          if [ -d artifacts/buildkit ]; then
+            find artifacts/buildkit -type f \( -name '*.sbom.json' -o -name '*.provenance.json' \) -exec cp {} ${{ env.RELEASE_ARTIFACTS_DIR }}/ \;
+          else
+            echo "::notice::No artifacts/buildkit directory; SBOM + provenance will be empty for this release."
+          fi
+
+      # ---------- Verify-only smoke (defense in depth) ----------
+      # GREEN-floor enforcement: on a v* tag we require a signed .deb;
+      # on workflow_dispatch (test / fork dispatch) we honor the alpha
+      # exception via --allow-unsigned-deb so PRs that cannot reach a
+      # signing secret still pass build. This is the only place the
+      # exception is permitted; the docs and the runbook both forbid
+      # it on the GREEN floor.
+      - name: Run release-verify smoke harness (tag, signed)
+        if: github.ref_type == 'tag'
+        run: |
+          go run ./tools/release-verify \
+            --artifacts-dir ${{ env.RELEASE_ARTIFACTS_DIR }} \
+            --tag ${{ steps.version.outputs.tag }} \
+            --report ${{ env.RELEASE_ARTIFACTS_DIR }}/release-verify-report.json
+
+      - name: Run release-verify smoke harness (dispatch, allow unsigned)
+        if: github.ref_type != 'tag'
+        run: |
+          go run ./tools/release-verify --allow-unsigned-deb \
+            --allow-missing-supplychain \
+            --artifacts-dir ${{ env.RELEASE_ARTIFACTS_DIR }} \
+            --tag ${{ steps.version.outputs.tag }} \
+            --report ${{ env.RELEASE_ARTIFACTS_DIR }}/release-verify-report.json
+
+      # ---------- Publish immutable GitHub Release artifacts ----------
+      # upload-artifact is useful CI evidence, but it is not the operator
+      # distribution surface. On tag releases the job must create/update the
+      # GitHub Release and attach the verified artifact tree, otherwise the
+      # release is false-green: signed bits existed only inside an Actions run.
+      - name: Build GitHub Release bundle
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          tag=${{ steps.version.outputs.tag }}
+          bundle="artifacts/midnight-release-${tag}.tar.gz"
+          tar -czf "$bundle" -C "${{ env.RELEASE_ARTIFACTS_DIR }}" .
+          sha256sum "$bundle" > "${bundle}.sha256"
+          mv "$bundle" "${bundle}.sha256" "${{ env.RELEASE_ARTIFACTS_DIR }}/"
+
+      - name: Publish GitHub Release artifacts
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag=${{ steps.version.outputs.tag }}
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "::notice::GitHub Release ${tag} already exists; uploading verified artifacts with --clobber"
+          else
+            gh release create "$tag" --title "$tag" --notes "Midnight ${tag}"
+          fi
+          assets=()
+          while IFS= read -r -d '' asset; do
+            assets+=("$asset")
+          done < <(find "${{ env.RELEASE_ARTIFACTS_DIR }}" -maxdepth 1 -type f -print0)
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::no release assets found in ${{ env.RELEASE_ARTIFACTS_DIR }}"
+            exit 1
+          fi
+          gh release upload "$tag" "${assets[@]}" --clobber
+          gh release view "$tag" --json assets --jq '.assets[].name' | sort > "${{ env.RELEASE_ARTIFACTS_DIR }}/github-release-assets.txt"
+          for required in \
+            "image-digests.txt" \
+            "release-verify-report.json" \
+            "midnight_${{ steps.version.outputs.version }}_SHA256SUMS" \
+            "midnight_${{ steps.version.outputs.version }}_SHA256SUMS.sigstore.json" \
+            "midnight_${{ steps.version.outputs.version }}_DISTRIBUTION_SHA256SUMS" \
+            "midnight_${{ steps.version.outputs.version }}_DISTRIBUTION_SHA256SUMS.sigstore.json" \
+            "midnight_${{ steps.version.outputs.version }}_homebrew.rb" \
+            "midnight_${{ steps.version.outputs.version }}_scoop.json" \
+            "midnight_${{ steps.version.outputs.version }}_distribution.json" \
+            "midnight_${{ steps.version.outputs.version }}_darwin_amd64.tar.gz" \
+            "midnight_${{ steps.version.outputs.version }}_darwin_arm64.tar.gz" \
+            "midnight_${{ steps.version.outputs.version }}_linux_amd64.tar.gz" \
+            "midnight_${{ steps.version.outputs.version }}_linux_arm64.tar.gz" \
+            "midnight_${{ steps.version.outputs.version }}_windows_amd64.zip" \
+            "midnight-release-${tag}.tar.gz" \
+            "midnight-release-${tag}.tar.gz.sha256"; do
+            if ! grep -Fxq "$required" "${{ env.RELEASE_ARTIFACTS_DIR }}/github-release-assets.txt"; then
+              echo "::error::GitHub Release ${tag} is missing required asset ${required}"
+              exit 1
+            fi
+          done
+          if [ "$(grep -Ec '\.tgz$' "${{ env.RELEASE_ARTIFACTS_DIR }}/github-release-assets.txt")" -ne 6 ]; then
+            echo "::error::GitHub Release ${tag} must contain exactly six npm package archives"
+            exit 1
+          fi
+
+      # ---------- Retain CI artifact copy ----------
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: midnight-release-${{ steps.version.outputs.tag }}
+          path: ${{ env.RELEASE_ARTIFACTS_DIR }}
+          if-no-files-found: error
+          retention-days: 14
+
+  publish-distribution:
+    name: publish CLI package channels
+    if: github.ref_type == 'tag' && vars.MIDNIGHT_DISTRIBUTION_PUBLISH == 'true'
+    needs: build-and-sign
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      NPM_PACKAGE: ${{ vars.MIDNIGHT_NPM_PACKAGE }}
+      HOMEBREW_TAP: ${{ vars.MIDNIGHT_HOMEBREW_TAP }}
+      SCOOP_BUCKET: ${{ vars.MIDNIGHT_SCOOP_BUCKET }}
+      COSIGN_IDENTITY_REGEXP: '^https://github\.com/packetloss404/midnight/\.github/workflows/release\.yml@refs/tags/v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$'
+      COSIGN_OIDC_ISSUER: 'https://token.actions.githubusercontent.com'
+    steps:
+      - name: Validate operator-owned distribution configuration
+        env:
+          NPM_BOOTSTRAP_TOKEN: ${{ secrets.MIDNIGHT_NPM_BOOTSTRAP_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.MIDNIGHT_HOMEBREW_TAP_TOKEN }}
+          SCOOP_BUCKET_TOKEN: ${{ secrets.MIDNIGHT_SCOOP_BUCKET_TOKEN }}
+        run: |
+          set -euo pipefail
+          for setting in NPM_PACKAGE HOMEBREW_TAP SCOOP_BUCKET; do
+            if [ -z "${!setting}" ]; then
+              echo "::error::${setting} is required when MIDNIGHT_DISTRIBUTION_PUBLISH=true"
+              exit 1
+            fi
+          done
+          for secret in HOMEBREW_TAP_TOKEN SCOOP_BUCKET_TOKEN; do
+            if [ -z "${!secret}" ]; then
+              echo "::error::${secret} is required for its least-privilege publication repository"
+              exit 1
+            fi
+          done
+          if [ -z "$NPM_BOOTSTRAP_TOKEN" ]; then
+            echo "::notice::npm publication will use the registry's configured OIDC trusted publisher"
+          fi
+
+      - name: Checkout release source
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download verified release artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: midnight-release-${{ github.ref_name }}
+          path: artifacts/release
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install current npm trusted-publishing client
+        run: npm install --global npm@^11.15.0
+
+      - name: Resolve and install pinned cosign
+        run: |
+          set -euo pipefail
+          cosign_version=$(grep -E '^cosign:' versions.yaml | awk '{print $2}' | tr -d '"' | tr -d "'")
+          if [ -z "$cosign_version" ]; then
+            echo "::error::cosign version missing from versions.yaml"
+            exit 1
+          fi
+          echo "COSIGN_VERSION=$cosign_version" >> "$GITHUB_ENV"
+
+      - uses: sigstore/cosign-installer@v3
+        with:
+          cosign-release: ${{ env.COSIGN_VERSION }}
+
+      - name: Verify exact publication inputs
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          for manifest in \
+            "midnight_${version}_SHA256SUMS" \
+            "midnight_${version}_DISTRIBUTION_SHA256SUMS"; do
+            manifest_path="artifacts/release/${manifest}"
+            cosign verify-blob "$manifest_path" \
+              --bundle "${manifest_path}.sigstore.json" \
+              --certificate-identity-regexp "$COSIGN_IDENTITY_REGEXP" \
+              --certificate-oidc-issuer "$COSIGN_OIDC_ISSUER"
+            (cd artifacts/release && sha256sum --check "$manifest")
+          done
+          ./packaging/release/verify-cli-archives.sh \
+            --dist artifacts/release \
+            --version "$version"
+
+          distribution="artifacts/release/midnight_${version}_distribution.json"
+          DIST_MANIFEST="$distribution" RELEASE_VERSION="$version" node <<'NODE'
+          const fs = require('node:fs');
+          const manifest = JSON.parse(fs.readFileSync(process.env.DIST_MANIFEST, 'utf8'));
+          if (manifest.version !== process.env.RELEASE_VERSION) throw new Error('distribution manifest version mismatch');
+          if (manifest.npm_package !== process.env.NPM_PACKAGE) throw new Error('distribution manifest npm package mismatch');
+          if (!Array.isArray(manifest.npm_packages) || manifest.npm_packages.length !== 6 || new Set(manifest.npm_packages).size !== 6) {
+            throw new Error('distribution manifest must name six unique npm packages');
+          }
+          NODE
+
+      - name: Publish npm native packages, then dispatcher
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.MIDNIGHT_NPM_BOOTSTRAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            unset NODE_AUTH_TOKEN
+          fi
+          publish_package() {
+            package_archive=$1
+            package_json=$(tar -xOf "$package_archive" package/package.json)
+            package_name=$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(0,"utf8")).name)' <<< "$package_json")
+            package_version=$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(0,"utf8")).version)' <<< "$package_json")
+            if [ "$(npm view "${package_name}@${package_version}" version 2>/dev/null || true)" = "$package_version" ]; then
+              echo "${package_name}@${package_version} is already published; preserving the immutable registry version"
+              return
+            fi
+            npm publish "$package_archive" --access public
+          }
+
+          version="${GITHUB_REF_NAME#v}"
+          distribution="artifacts/release/midnight_${version}_distribution.json"
+          shopt -s nullglob
+          archives=(artifacts/release/*.tgz)
+          if [ "${#archives[@]}" -ne 6 ]; then
+            echo "::error::expected six signed npm archives; found ${#archives[@]}"
+            exit 1
+          fi
+          dispatcher=""
+          native_archives=()
+          declare -A seen_packages=()
+          for package_archive in "${archives[@]}"; do
+            package_json=$(tar -xOf "$package_archive" package/package.json)
+            package_name=$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(0,"utf8")).name)' <<< "$package_json")
+            package_version=$(node -e 'const fs=require("node:fs"); process.stdout.write(JSON.parse(fs.readFileSync(0,"utf8")).version)' <<< "$package_json")
+            if [ "$package_version" != "$version" ]; then
+              echo "::error::${package_archive} contains version ${package_version}; expected ${version}"
+              exit 1
+            fi
+            if [ -n "${seen_packages[$package_name]:-}" ]; then
+              echo "::error::duplicate npm package ${package_name}"
+              exit 1
+            fi
+            seen_packages[$package_name]=1
+            DIST_MANIFEST="$distribution" PACKAGE_NAME="$package_name" node -e 'const fs=require("node:fs"); const manifest=JSON.parse(fs.readFileSync(process.env.DIST_MANIFEST,"utf8")); if (!manifest.npm_packages.includes(process.env.PACKAGE_NAME)) throw new Error("unexpected npm package "+process.env.PACKAGE_NAME)'
+            if [ "$package_name" = "$NPM_PACKAGE" ]; then
+              dispatcher="$package_archive"
+            else
+              native_archives+=("$package_archive")
+            fi
+          done
+          if [ -z "$dispatcher" ] || [ "${#native_archives[@]}" -ne 5 ]; then
+            echo "::error::signed npm archives must contain one dispatcher and five native packages"
+            exit 1
+          fi
+          for package_archive in "${native_archives[@]}"; do
+            publish_package "$package_archive"
+          done
+          publish_package "$dispatcher"
+
+      - name: Checkout Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.HOMEBREW_TAP }}
+          token: ${{ secrets.MIDNIGHT_HOMEBREW_TAP_TOKEN }}
+          path: artifacts/homebrew-tap
+
+      - name: Publish Homebrew formula
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/homebrew-tap/Formula
+          version="${GITHUB_REF_NAME#v}"
+          cp "artifacts/release/midnight_${version}_homebrew.rb" artifacts/homebrew-tap/Formula/midnight.rb
+          git -C artifacts/homebrew-tap add Formula/midnight.rb
+          if git -C artifacts/homebrew-tap diff --cached --quiet; then
+            exit 0
+          fi
+          git -C artifacts/homebrew-tap config user.name 'github-actions[bot]'
+          git -C artifacts/homebrew-tap config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C artifacts/homebrew-tap commit -m "midnight ${GITHUB_REF_NAME}"
+          git -C artifacts/homebrew-tap push
+
+      - name: Checkout Scoop bucket
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ env.SCOOP_BUCKET }}
+          token: ${{ secrets.MIDNIGHT_SCOOP_BUCKET_TOKEN }}
+          path: artifacts/scoop-bucket
+
+      - name: Publish Scoop manifest
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cp "artifacts/release/midnight_${version}_scoop.json" artifacts/scoop-bucket/midnight.json
+          git -C artifacts/scoop-bucket add midnight.json
+          if git -C artifacts/scoop-bucket diff --cached --quiet; then
+            exit 0
+          fi
+          git -C artifacts/scoop-bucket config user.name 'github-actions[bot]'
+          git -C artifacts/scoop-bucket config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git -C artifacts/scoop-bucket commit -m "midnight ${GITHUB_REF_NAME}"
+          git -C artifacts/scoop-bucket push

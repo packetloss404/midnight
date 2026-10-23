@@ -1,0 +1,33 @@
+http:
+  routers:
+    acme-http01-challenge:
+      rule: 'PathPrefix(`/.well-known/acme-challenge/`)'
+      service: 'acme-http@internal'
+      entryPoints:
+        - 'web'
+      priority: 2147483647
+    secure:
+      rule: 'Host(`secure.example.test`) && PathPrefix(`/`)'
+      service: 'secure-service'
+      entryPoints:
+        - 'websecure'
+      tls: {}
+      middlewares:
+        - 'secure-headers'
+  services:
+    secure-service:
+      loadBalancer:
+        servers:
+          - url: 'http://10.0.0.3:8080'
+  middlewares:
+    secure-headers:
+      headers:
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: true
+        customRequestHeaders:
+          X-Forwarded-Proto: 'https'
+        customResponseHeaders:
+          Referrer-Policy: 'no-referrer'
+          X-Content-Type: 'nosniff'
+          X-Frame-Options: 'DENY'

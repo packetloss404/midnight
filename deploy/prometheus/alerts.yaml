@@ -1,0 +1,67 @@
+groups:
+  - name: midnight-phase0.locked
+    rules:
+      - alert: DiskPressure
+        expr: midnight_disk_used_ratio >= 0.85
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Midnight disk pressure is critical
+          runbook_url: /usr/share/midnight/runbooks/disk-pressure.md
+      - alert: AgentLost
+        expr: midnight_agent_heartbeat_age_seconds > 15
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: Midnight agent heartbeat is stale
+          runbook_url: /usr/share/midnight/runbooks/restart-service.md
+      - alert: BackupFailed
+        expr: increase(midnight_backup_failed_total[15m]) > 0
+        for: 0m
+        labels:
+          severity: critical
+        annotations:
+          summary: Midnight platform backup failed
+          runbook_url: /usr/share/midnight/runbooks/backup-restore.md
+      - alert: CertExpiringSoon
+        expr: midnight_certificate_expires_in_seconds < 604800
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: Midnight managed certificate expires within seven days
+          runbook_url: /usr/share/midnight/runbooks/domain-tls-failure.md
+      - alert: DeployJobStuck
+        expr: midnight_deploy_job_heartbeat_gap_seconds > 180
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: Midnight deploy job appears stuck
+          runbook_url: /usr/share/midnight/runbooks/failed-deploy-triage.md
+      - alert: BuildKitCacheCorruption
+        expr: increase(midnight_buildkit_cache_corrupt_total[10m]) > 0
+        for: 0m
+        labels:
+          severity: warning
+        annotations:
+          summary: Midnight BuildKit cache corruption detected
+          runbook_url: /usr/share/midnight/runbooks/failed-deploy-triage.md
+      - alert: ConntrackPressure
+        expr: midnight_conntrack_used_ratio > 0.80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: Midnight conntrack usage is elevated
+          runbook_url: /usr/share/midnight/runbooks/failed-deploy-triage.md
+      - alert: BackupOffhostMissing
+        expr: midnight_backup_offhost_destinations_total == 0
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: Midnight has no off-host backup destination configured
+          runbook_url: /usr/share/midnight/runbooks/backup-restore.md
