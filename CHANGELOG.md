@@ -18,6 +18,10 @@ correspond to individual public commits. See [Public Git History](README.md#publ
   missing Vite GraphQL proxy; no running workload is invented by the tests.
 - Kept `midnight up` follow timeouts resumable when SSE connection setup hits
   its deadline, using REST status before reporting a deployment failure.
+- Retried membership transactions after PostgreSQL serialization/deadlock
+  conflicts so a losing conditional writer receives the typed version
+  conflict. Canceling or failing a build with no recorded start leaves its
+  build window unknown instead of fabricating completion evidence.
 - Corrected the MVP runner's obsolete dashboard directory and replaced the
   legacy template queue assertion with canonical PostgreSQL provisioning,
   connectivity, replacement-persistence, and cleanup checks. Added runner
@@ -30,6 +34,10 @@ correspond to individual public commits. See [Public Git History](README.md#publ
   records skipped tests. Published a feature verification ledger, corrected
   the pinned Go version, and clarified that backup metadata/restore plans and
   synthetic surface inputs do not satisfy runtime or recovery acceptance.
+- Added separate real BuildKit/registry and Traefik HTTP replacement checks,
+  exact-source MinIO S3/credential tests, and a PostgreSQL browser lane for
+  real TOTP enrollment, human sessions, variables, changeset apply, and stale
+  configuration writes. Installed and external-provider proof remains separate.
 
 ### Fixed (2026-10-24, public dependency scan)
 

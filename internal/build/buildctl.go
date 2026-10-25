@@ -516,11 +516,14 @@ func buildctlImageRef(inv BuildctlInvocation) string {
 	if inv.Registry == "" {
 		return inv.Image
 	}
-	if strings.Contains(inv.Image, "/") {
-		// Operator-supplied a full reference; respect it.
+	registry := strings.TrimSuffix(inv.Registry, "/")
+	first, _, hasPath := strings.Cut(inv.Image, "/")
+	if hasPath && (strings.ContainsAny(first, ".:") || first == "localhost" || strings.HasPrefix(inv.Image, registry+"/")) {
+		// A namespace such as midnight/web is relative to the configured
+		// registry. Preserve an explicitly qualified registry host instead.
 		return inv.Image
 	}
-	return strings.TrimSuffix(inv.Registry, "/") + "/" + inv.Image
+	return registry + "/" + inv.Image
 }
 
 // resolveImageDigest determines the pushed image digest, preferring buildctl's

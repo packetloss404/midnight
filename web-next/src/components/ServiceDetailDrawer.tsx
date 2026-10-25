@@ -484,7 +484,7 @@ function ServiceDetailBody({
               environmentId={environmentId}
               section={selectedConfigureSection}
               onSectionChange={changeConfigureSection}
-              authority="operator"
+              authority={humanSession ? "human" : "operator"}
             />
           ) : humanSession ? (
             <HumanServiceConfigure
@@ -767,6 +767,20 @@ export function ConfigurePanel({
           title="Source connection"
           detail="Connecting a source requires signing in as a workspace member. Emergency recovery access can't do this on your behalf."
         />
+      ) : section === "variables" && authority === "human" ? (
+        projectId && environmentId ? (
+          <TenantVariablesEditor
+            projectId={projectId}
+            serviceId={serviceId}
+            environmentId={environmentId}
+          />
+        ) : (
+          <CapabilityBoundary
+            state="unavailable"
+            title="Service variables"
+            detail="A concrete project and environment are required before Midnight can load variable metadata. No variable request was sent."
+          />
+        )
       ) : section === "variables" ? (
         <CapabilityBoundary
           state="degraded"

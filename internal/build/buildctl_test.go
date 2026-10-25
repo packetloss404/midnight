@@ -22,6 +22,24 @@ type fakeCommandRunner struct {
 	captured      []capturedExec
 }
 
+func TestBuildctlPushTargetHonorsRegistryAndNamespaces(t *testing.T) {
+	for _, test := range []struct{ image, registry, want string }{
+		{"web:latest", "registry.test:5000", "registry.test:5000/web:latest"},
+		{"midnight/web:latest", "registry.test:5000", "registry.test:5000/midnight/web:latest"},
+		{"other.test/team/web:latest", "registry.test:5000", "other.test/team/web:latest"},
+		{"localhost/team/web:latest", "registry.test:5000", "localhost/team/web:latest"},
+		{"registry/team/web:latest", "registry", "registry/team/web:latest"},
+		{"midnight/web:latest", "", "midnight/web:latest"},
+	} {
+		t.Run(test.image+"_via_"+test.registry, func(t *testing.T) {
+			invocation := BuildctlInvocation{Image: test.image, Registry: test.registry}
+			if got := buildctlImageRef(invocation); got != test.want {
+				t.Fatalf("push target = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 type capturedExec struct {
 	name string
 	args []string

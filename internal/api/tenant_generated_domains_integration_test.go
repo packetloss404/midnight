@@ -346,8 +346,14 @@ func TestTenantGeneratedDomainLifecycleAndCurrentActiveAttachment(t *testing.T) 
 		"",
 	)
 	if viewerRead.Code != http.StatusOK ||
-		viewerRead.Header.Get("ETag") != "" {
+		viewerRead.Header.Get("ETag") != strongVersionETag(idle.Version) {
 		t.Fatalf("viewer read=%#v", viewerRead)
+	}
+	var viewerDomain TenantGeneratedDomainView
+	if err := json.Unmarshal([]byte(viewerRead.Body), &viewerDomain); err != nil ||
+		viewerDomain.ID != idle.ID || viewerDomain.ServiceID != idle.ServiceID ||
+		viewerDomain.EnvironmentID != idle.EnvironmentID {
+		t.Fatalf("viewer domain=%#v err=%v", viewerDomain, err)
 	}
 	viewerWrite := request(
 		viewer.AccessToken,

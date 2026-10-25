@@ -136,7 +136,8 @@ if run_case; then fail "zero poll budget passed"; fi
 
 export MVP_PROJECT_ID=prj_app MVP_SERVICE_ID=svc_app MVP_ENVIRONMENT_ID=env_app
 export MVP_PUBLIC_HOST=app.example.test MVP_PUBLIC_PATH=/ MVP_APP_POLL_ATTEMPTS=2
-export MVP_IMAGE="registry.example/app@sha256:$(printf '%064d' 0 | tr 0 a)"
+MVP_IMAGE="registry.example/app@sha256:$(printf '%064d' 0 | tr 0 a)"
+export MVP_IMAGE
 export MVP_EXPECTED_RESPONSE='expected app marker'
 run_app_case() {
   rm -f "$STUB_LOG"

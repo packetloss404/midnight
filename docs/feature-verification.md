@@ -21,11 +21,26 @@ commit-bound evidence.
   Projects/services survive a browser reload, not an API-process restart.
   Its image journey requires the memory API's typed unavailable response for
   durable deployment intake; it does not prove a queued deployment, image
-  pull, container health, traffic, or rollout completion. It skips against an external
-  URL so test mutations cannot touch an operator installation.
+  pull, container health, traffic, or rollout completion. It skips against an
+  external URL so test mutations cannot touch an operator installation.
+- **Browser with PostgreSQL and human sessions:**
+  `web-next/playwright.postgres.config.ts` owns a real API, disposable database,
+  Vite, and Chromium. `e2e-postgres/human-control-plane.e2e.ts` exercises
+  first-administrator enrollment with TOTP, human-session authentication,
+  project/service creation, encrypted variable and runtime changeset review
+  and apply, stale-version rejection, variable replacement, logout revocation,
+  and password/TOTP login. It does not intercept requests. Applying desired
+  state without deploying must leave the deployment list empty.
 - **Durable integration:** `-tags=integration` enables disposable PostgreSQL
   and Docker tests. Read their pass/skip events; Go may exit successfully
   when a live dependency is missing and the relevant test skips.
+- **Real local BuildKit/registry and Traefik:**
+  `scripts/ci/live-runtime-gate.sh` starts disposable Linux fixtures and
+  requires actual pass events for a BuildKit image build/push and the Traefik
+  `LiveHTTP` subtest. Traefik must serve an identifying HTTP body, observe a
+  published replacement backend, and reject an unknown Host with 404. The
+  built image and the HTTP test backends are separate fixtures; this does not
+  prove that Midnight deployed and routed that built image as one workload.
 - **Installed/external:** package installation, real provider credentials,
   public DNS/TLS, source builds, worker promotion, restart/rollback, and
   destructive recovery require their own environment and retained evidence.
@@ -38,8 +53,9 @@ commit-bound evidence.
   navigate desktop/mobile grid, map, inspector, and empty deployments, and
   read actual API documentation. Other UI states remain covered by fixture
   browser tests and component tests. Human identity, invitations, automation
-  tokens, and recovery have handler/CLI/PostgreSQL coverage; this browser
-  lane uses memory developer mode and does not prove a durable human login.
+  tokens, and recovery have handler/CLI/PostgreSQL coverage. The separate
+  PostgreSQL browser lane covers actual enrollment, durable human sessions,
+  sign-in, and sign-out; the default memory browser lane does not.
 - **Image deployment and actions.** The real browser submits a digest-pinned
   image through `/graphql/v2`, requires a typed unavailable result in memory
   mode, and checks that canonical REST state has no invented deployment.
@@ -76,8 +92,11 @@ commit-bound evidence.
   DNS and ingress proof; the September host observations are historical.
 - **BuildKit and source builds.** Build/worker tests cover source archives,
   path confinement, secret handling, queue handoff, artifact generation,
-  registry publication contracts, and durable source intake. A BuildKit
-  secret-mount test remains explicitly opt-in through `MIDNIGHT_LIVE_*`.
+  registry publication contracts, and durable source intake. The live runtime
+  gate requires a real minimal Dockerfile build and registry push twice,
+  comparing image digests and the generated SBOM/provenance bytes. It does
+  not execute that image. A Railpack secret-mount test remains explicitly
+  opt-in through `MIDNIGHT_LIVE_*`.
   A queued build or a mocked build runner does not prove a real Railpack or
   Dockerfile build, registry push, runtime activation, or BuildKit survival
   across a server restart (`MID-111`).
@@ -98,12 +117,16 @@ commit-bound evidence.
   `empty` projection is not proof of a populated tamper-evident chain.
 - **Secrets and variable lifecycle.** Vault/API/integration tests cover
   envelope encryption, AAD, versioning, sealed scopes, KEK rotation,
-  redaction, and atomic mutation. Build/runtime injection and decrypt-audit
+  redaction, and atomic mutation. The PostgreSQL browser lane covers a secret
+  variable's desired-state create/replace, metadata-only reads, stale-version
+  rejection, and changeset apply. Build/runtime injection and decrypt-audit
   evidence require actual workers. Saving desired state does not restart or
   deploy a workload.
 - **Atomic environment changesets.** API/PostgreSQL tests cover capability
   revalidation, exact revisions, all-resource atomicity, usage reservation,
-  and Apply & Deploy intake. Fixture UI tests cover review interactions.
+  and Apply & Deploy intake. Fixture UI tests cover review interactions;
+  the PostgreSQL browser lane exercises real two-kind variable/runtime draft
+  persistence, review, apply-only, and configuration compare-and-swap.
   A completed apply does not mean the subsequent rollout succeeded; read
   aggregate/per-service operation progress. Direct CLI Apply & Deploy and
   operation-group commands remain `MID-107`.
@@ -120,7 +143,9 @@ commit-bound evidence.
   remain later work (`MID-203`).
 - **Node agent and observability.** Agent protocol/runtime/supervisor and
   telemetry tests cover desired state, probes, drift, redaction, and explicit
-  coverage gaps. Registering a test agent and submitting route observations
+  coverage gaps. The live Traefik lane proves local routing and observed
+  backend replacement; it does not launch Midnight's node agent. Registering
+  a test agent and submitting route observations
   in `surface-agreement` does not run a host agent or collect Docker/Traefik
   logs. Installed host degradation and real application-log streaming remain
   separate acceptance assertions.
@@ -139,7 +164,11 @@ commit-bound evidence.
   upstream workload deploys successfully.
 - **Volumes, backups, and recovery.** Volume/Docker/recovery tests cover
   write/read persistence, encrypted objects, staging, journaled apply, and
-  error handling. Real execution uses service-volume workflows and
+  error handling. The integration gate requires real S3 round-trip and sealed
+  credential tests against MinIO, built from the exact upstream source commit
+  `7aac2a2c5b7c882e68c1ce017d8256be2feea27f`; the old public binary images
+  are no longer available. Those tests prove the storage/credential boundary,
+  not off-host application recovery. Real execution uses service-volume workflows and
   `midnight-recovery`; see the [runbook](runbooks/backup-restore.md). The
   experimental `/backup/runs` API writes metadata containing caller-supplied
   byte counts. `scripts/mvp-acceptance.sh backup` checks those manifests and
@@ -154,8 +183,10 @@ go test ./... -race -count=1
 npm --prefix web-next ci
 npm --prefix web-next run test:e2e:install
 npm --prefix web-next run test:gate0
+(cd web-next && npx playwright test --config playwright.postgres.config.ts)
 bash scripts/mvp-acceptance_test.sh
 bash scripts/ci/integration-gate.sh
+bash scripts/ci/live-runtime-gate.sh
 ```
 
 The default browser command owns its local API and Vite processes. It needs
@@ -165,10 +196,24 @@ external browser target and disables the throwaway mutation suite.
 skips unless its resource IDs are supplied. Login fixture tests do not
 become live identity-provider tests when served by a production asset server.
 
+The PostgreSQL browser lane is separate from `test:gate0`. It needs Linux or
+macOS file permissions, Docker unless a disposable loopback PostgreSQL DSN is
+supplied, and free ports 4182/4183. Its startup script creates fresh temporary
+key material and accepts an external DSN only for a loopback database named
+`midnight_browser_e2e`. It removes its own database container and excluded
+`.midnight/browser-e2e` state when stopping. An existing production database
+is not a test target. The lane's assertions concern API/browser/database
+behavior; no deploy worker or third-party identity provider is involved.
+
 The integration gate requires a working Docker daemon and records JSON test
 events plus skipped-test names under `artifacts/ci-integration/`. Required
 durable canaries must actually pass. Provider opt-ins and unavailable runtime
 fixtures may still skip; inspect that ledger before making feature claims.
+The separate live runtime gate requires Linux Docker with privileged BuildKit
+and host networking. Its JSON events and fixture logs are written under
+`artifacts/ci-live-runtime/`. CI uploads both runtime and integration evidence;
+the PostgreSQL browser job retains failure diagnostics. These are coverage
+mechanisms; the current commit's retained job results determine pass status.
 
 For installed acceptance, run the specific modes in
 [MVP acceptance](mvp-acceptance.md) and the real recovery runbook. Keep raw

@@ -36,6 +36,8 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 	if binary == "" || registry == "" {
 		t.Skip("set MIDNIGHT_BUILDCTL and MIDNIGHT_BUILDKIT_REGISTRY to run this integration test")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 
 	tmp := t.TempDir()
 	contextDir := filepath.Join(tmp, "ctx")
@@ -56,7 +58,7 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 	}
 
 	runner := BuildctlRunner{BuildctlPath: binary, Now: func() time.Time { return time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC) }}
-	if _, err := runner.VerifyVersion(context.Background()); err != nil {
+	if _, err := runner.VerifyVersion(ctx); err != nil {
 		t.Fatalf("configured buildctl version check: %v", err)
 	}
 
@@ -72,13 +74,13 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 		Insecure:       true,
 		CacheRoot:      filepath.Join(tmp, "cache"),
 	}
-	res1, err := runner.Build(context.Background(), inv)
+	res1, err := runner.Build(ctx, inv)
 	if err != nil {
 		t.Fatalf("first build: %v", err)
 	}
 
 	inv.OutputDir = out2
-	res2, err := runner.Build(context.Background(), inv)
+	res2, err := runner.Build(ctx, inv)
 	if err != nil {
 		t.Fatalf("second build: %v", err)
 	}

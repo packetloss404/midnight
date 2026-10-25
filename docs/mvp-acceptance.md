@@ -16,7 +16,7 @@ The target remains a single trusted VM. Multi-host scheduling, enterprise tenanc
 
 ## Next Acceptance Slice: OSS Railway Happy Path
 
-The next acceptance slice is the smallest open-source Railway-like path that can be run on a fresh supported VM and shown to a design partner: package install, one real app deploy, one HTTPS route, one official Postgres template, one audit trail, one backup/restore plan, and typed recovery states. It is not accepted while the product only reaches queued draft/job state, memory-mode diagnostics, synthetic failures, or dashboard-only fixture data.
+The next acceptance slice is the smallest open-source Railway-like path that can be run on a fresh supported VM and shown to a design partner: package install, one real app deploy, one HTTPS route, one official Postgres template, one audit trail, one real off-host backup/restore drill, and typed recovery states. It is not accepted while the product only reaches queued draft/job state, memory-mode diagnostics, synthetic failures, or dashboard-only fixture data.
 
 Run the slice as these runner modes, keeping the redacted evidence directory from each mode:
 
@@ -37,7 +37,7 @@ The review findings map to these positive assertions:
 | Official Postgres template runtime | The canonical REST saga creates durable service/config/encrypted-variable/volume/deployment/outbox truth. Success requires a private `psql` write, container restart, marker read from the same volume, and probe cleanup. |
 | Source-to-HTTP deployment is recorded; HTTPS and restart acceptance remain. | A digest-pinned app reaches healthy runtime inventory and remains reachable over HTTPS after `midnight-server` restart. |
 | Failure visibility still allows synthetic proof. | A real failed deploy, host degradation, and backup/restore failure each emit typed actionable reason codes. |
-| Dashboard/API evidence can diverge from operator reality. | `surface-agreement` proves Dashboard/API/CLI agree for projects, services, deploy operations, hosts, routes, logs, audit evidence, recovery state, and generated evidence. |
+| Dashboard/API evidence can diverge from operator reality. | `surface-agreement` checks API/CLI/projection agreement using test inputs; real API and PostgreSQL browser lanes exercise user workflows separately. Installed inventory, real logs, and recovery evidence still require the VM checks. |
 | Memory-mode blockers are easy to mistake for acceptance. | `memory-blockers` records owned diagnostics only; package/VM runner modes provide the passing assertions. |
 
 ## OSS Railway Readiness Checklist
@@ -119,6 +119,41 @@ make release-check
 ```
 
 Expected result: every command exits `0`. If `make release-check` writes evidence to its default artifact directory, keep those files with the acceptance run.
+
+### Disposable integration, browser, and runtime lanes
+
+Run the additional lanes before promoting a candidate:
+
+```sh
+npm --prefix web-next run test:e2e:install
+npm --prefix web-next run test:gate0
+(cd web-next && npx playwright test --config playwright.postgres.config.ts)
+bash scripts/ci/integration-gate.sh
+bash scripts/ci/live-runtime-gate.sh
+```
+
+The default browser lane mixes explicitly labelled fixture tests with actual
+memory-API HTTP journeys. The separate PostgreSQL browser lane uses a fresh
+disposable database and real enrollment/TOTP/sessions, project/service
+creation, variable/runtime changeset review and apply, stale-version
+rejection, secret metadata checks, and logout revocation. It requires
+Linux/macOS key-file permissions; its startup script may create its own
+PostgreSQL Docker container. It never targets the installed production DB.
+
+The integration gate builds an exact-source MinIO fixture and requires
+actual durable boot, source materialization, Docker volume/one-off, and S3
+credential/storage canaries. It records optional skips. The Linux live
+runtime gate separately builds and pushes a minimal image through real
+BuildKit/registry, then checks Traefik HTTP bodies before and after backend
+replacement plus an unknown-host 404. The image-build fixture and Traefik
+test backends are independent; this is not an installed source-to-public-app
+proof. See the [verification ledger](feature-verification.md) and
+[CI guide](contributing/ci.md) for prerequisites and evidence paths.
+
+Each lane's pass is determined by its actual retained run. These mechanisms
+do not establish external AI/GitHub/DNS credentials, public HTTPS, package
+installation, complete worker promotion, or off-host destruction/restore.
+Those remain explicit checks below.
 
 ## Local Dashboard/API Smoke Path
 

@@ -368,6 +368,7 @@ describe("StagedChangesBanner", () => {
     const viewService = vi.fn();
     const viewDeployment = vi.fn();
     const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
     render(
       <QueryClientProvider client={client}>
         <StagedChangesBanner
@@ -392,6 +393,7 @@ describe("StagedChangesBanner", () => {
     expect(screen.getByText("Redeploy")).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Apply & deploy" }));
     await waitFor(() => expect(apiMocks.applyAndDeployEnvironmentChangeset).toHaveBeenCalledWith("env-production", 7));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["tenant-service-environment-variables"] }));
     expect(await screen.findByRole("region", { name: "Activity" })).toBeVisible();
     await waitFor(() =>
       expect(apiMocks.getEnvironmentOperationGroup).toHaveBeenCalledWith(

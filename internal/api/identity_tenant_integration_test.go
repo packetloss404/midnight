@@ -582,6 +582,24 @@ func TestPostgresIdentityClaimSessionRestartAndTenantConcealment(t *testing.T) {
 		t.Fatalf("durable identity audit rows=%d, want 3", identityAuditRows)
 	}
 	for expectedVersion := latestVersion; expectedVersion >= 40; expectedVersion-- {
+		if expectedVersion == 42 {
+			if down, err := runner.Down(ctx); err == nil || down != nil || !strings.Contains(err.Error(), "encrypted replay history exists") {
+				t.Fatalf("sensitive response rollback with replay history: file=%#v err=%v", down, err)
+			}
+			// Expire only encrypted response material while retaining the
+			// actor/tenant attempt history needed by the next downgrade guard.
+			expired, err := pool.Exec(ctx, `
+				UPDATE idempotency_keys
+				SET state='EXPIRED', response_storage='plaintext-v1',
+				    response_status=NULL, response_body=NULL, response_headers=NULL,
+				    response_kek_id=NULL, response_wrapped_dek=NULL,
+				    response_ciphertext=NULL, response_envelope_form=NULL,
+				    response_aad_sha256=NULL
+				WHERE response_storage='envelope-v1'`)
+			if err != nil || expired.RowsAffected() == 0 {
+				t.Fatalf("expire encrypted replay history: rows=%d err=%v", expired.RowsAffected(), err)
+			}
+		}
 		down, err := runner.Down(ctx)
 		if err != nil || down == nil || down.Version != expectedVersion {
 			t.Fatalf(

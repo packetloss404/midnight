@@ -40,6 +40,23 @@ run unless their explicit environment inputs are present. Setting
 `MIDNIGHT_E2E_BASE_URL` bypasses local server startup and skips the local
 mutation suite to avoid changing an operator's external installation.
 
+Run `npm run test:e2e:postgres` on Linux/macOS for the separate production-storage
+browser lane. It performs first-administrator password/TOTP setup, uses a real
+human session to create a project and service, saves and reloads an encrypted
+variable/runtime draft, applies it without deploying, rotates a secret, checks
+stale variable/config writes receive HTTP 412, and proves logout revokes the old
+session before another MFA login. No API requests are intercepted. Applying
+without deploying does not prove a worker or container ran.
+
+The harness starts its own disposable Postgres 16 container when Docker is
+available, or accepts `MIDNIGHT_PG_E2E_DSN` for a fresh database on loopback named
+`midnight_browser_e2e`. It refuses other database names/hosts. The API migrates
+that database with random test keys and a temporary recovery credential;
+the harness removes its generated keys and only the container it created.
+Supplied databases are not reset or removed. Ports 4182 and 4183 must be free.
+The lane uses production KEK file permissions and runs separately from
+`test:gate0`; it requires a Linux/macOS shell, Go, Node, and Chromium.
+
 ## Agent panel
 
 The right-rail dock (`AgentDock`) is mounted once in `AppShell` and persists

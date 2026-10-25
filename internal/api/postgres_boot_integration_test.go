@@ -50,17 +50,17 @@ func TestPostgresBootPersistsAcrossPoolRouterRebuild(t *testing.T) {
 		t.Fatalf("compat = %#v, want api=%s schema=%d", compat, version.APIVersion, version.SchemaVersion)
 	}
 	up := doRouterJSON[migrationsActionResponse](t, router1, http.MethodPost, "/api/v1alpha/migrations", `{"action":"up"}`, nil, http.StatusOK)
-	if up.Action != "up" || len(up.Files) == 0 {
-		t.Fatalf("migration up response = %#v, want applied files", up)
-	}
-	for _, file := range up.Files {
-		if !file.Applied || !strings.HasPrefix(file.UpSHA256, "sha256:") {
-			t.Fatalf("migration file = %#v, want applied with real sha", file)
-		}
+	if up.Action != "up" || len(up.Files) != 0 {
+		t.Fatalf("migration up response = %#v, want no pending migrations after boot", up)
 	}
 	list1 := doRouterJSON[migrationsListResponse](t, router1, http.MethodGet, "/api/v1alpha/migrations", "", nil, http.StatusOK)
 	if list1.AppliedCount != list1.LatestVersion || list1.PendingCount != 0 || len(list1.Migrations) != list1.LatestVersion {
 		t.Fatalf("migration list = %#v, want fully applied", list1)
+	}
+	for _, file := range list1.Migrations {
+		if !file.Applied || !strings.HasPrefix(file.UpSHA256, "sha256:") {
+			t.Fatalf("migration file = %#v, want applied with real sha", file)
+		}
 	}
 
 	project := doRouterJSON[Project](t, router1, http.MethodPost, "/api/v1alpha/projects", `{"workspace_id":"wrk_default","slug":"boot","display_name":"Boot Project"}`, map[string]string{"Idempotency-Key": "boot-create-project"}, http.StatusCreated)

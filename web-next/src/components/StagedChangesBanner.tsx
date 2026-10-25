@@ -174,6 +174,7 @@ export function StagedChangesBanner({
     );
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.environmentResources(environmentId) }),
+      queryClient.invalidateQueries({ queryKey: ["tenant-service-environment-variables"] }),
       queryClient.invalidateQueries({ queryKey: ["service-environment-config"] }),
       queryClient.invalidateQueries({ queryKey: ["tenant-generated-domains"] }),
       queryClient.invalidateQueries({ queryKey: ["volume-recovery"] }),

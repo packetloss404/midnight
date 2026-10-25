@@ -84,6 +84,18 @@ import {
 } from "./ServiceDetailDrawer";
 
 describe("ServiceDetailDrawer configure integration", () => {
+	it("keeps administrator human variable and runtime edits on tenant authority", () => {
+		const props = { serviceId: "svc_1", projectId: "prj_1", environmentId: "env_1", authority: "human" as const };
+		const view = render(<ConfigurePanel {...props} section="variables" />);
+		expect(screen.getByTestId("tenant-variables")).toHaveTextContent("prj_1:svc_1:env_1");
+		expect(screen.queryByTestId("variables")).not.toBeInTheDocument();
+		view.rerender(<ConfigurePanel {...props} section="runtime" />);
+		expect(screen.getByTestId("service-settings-runtime")).toHaveAttribute("data-authority", "human");
+		view.rerender(<ConfigurePanel serviceId="svc_1" authority="human" section="variables" />);
+		expect(screen.queryByTestId("variables")).not.toBeInTheDocument();
+		expect(screen.getByText(/A concrete project and environment are required/)).toBeVisible();
+	});
+
 	it("mounts real settings modes for independently routable networking and runtime sections", () => {
 		const props = {
 			serviceId: "svc_1",

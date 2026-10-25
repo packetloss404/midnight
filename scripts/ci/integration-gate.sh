@@ -18,8 +18,12 @@ docker build -t midnight-test-minio:7aac2a2c5b7c test/integration/minio
 mkdir -p artifacts/ci-integration
 results=artifacts/ci-integration/results.jsonl
 set +e
-GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 2 -tags=integration -json -count=1 -timeout=20m ./... | tee "$results"
-test_exit=${PIPESTATUS[0]}
+# Testcontainers packages share a Docker reaper; serialize package startup so
+# concurrent first clients cannot race its handshake and lose cleanup ownership.
+GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 1 -tags=integration -json -count=1 -timeout=20m ./... | tee "$results"
+pipeline_status=("${PIPESTATUS[@]}")
+test_exit=${pipeline_status[0]}
+evidence_exit=${pipeline_status[1]}
 set -e
 
 jq -r 'select(.Action == "skip" and .Test != null) | .Package + " " + .Test' "$results" \
@@ -37,6 +41,10 @@ if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
 fi
 if ((test_exit != 0)); then
   exit "$test_exit"
+fi
+if ((evidence_exit != 0)); then
+  echo 'integration gate: could not retain complete test evidence' >&2
+  exit "$evidence_exit"
 fi
 
 required_tests=(
