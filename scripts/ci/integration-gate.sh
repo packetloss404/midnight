@@ -52,6 +52,7 @@ fi
 
 required_tests=(
   'github.com/midnight/midnight/internal/api TestPostgresBootPersistsAcrossPoolRouterRebuild'
+  'github.com/midnight/midnight/internal/api TestOperatorSourceUpInheritsOnlyEligibleManagedRoutesAtomically'
   'github.com/midnight/midnight/cmd/midnight-buildkit TestTenantSourceUpHTTPOutboxWorkerMaterializationAndRelease'
   'github.com/midnight/midnight/internal/volume TestManagerPersistsBytesAcrossRealDockerContainerReplacement'
   'github.com/midnight/midnight/internal/runtime/docker TestRunOneOffAgainstDockerSurvivesAdapterRestartWithoutRerun'
