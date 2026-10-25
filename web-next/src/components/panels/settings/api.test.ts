@@ -206,7 +206,7 @@ describe("service config REST surface", () => {
 			{
 				auth: "operator",
 				method: "PUT",
-				headers: { "Idempotency-Key": "settings-save-v2" },
+				headers: { "Idempotency-Key": "settings-save-v2", "If-Match": '"2"' },
 				body: putConfig,
 			},
 		);

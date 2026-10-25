@@ -63,11 +63,13 @@ vi.mock("./panels/github/ServiceSourcePanel", () => ({
 	ServiceSourcePanel: ({
 		projectId,
 		serviceId,
+		environmentId,
 	}: {
 		projectId: string;
 		serviceId: string;
+		environmentId?: string;
 	}) => (
-		<div data-testid="service-source-panel">
+		<div data-testid="service-source-panel" data-environment={environmentId}>
 			{projectId}:{serviceId}
 			<button type="button">Connect source</button>
 		</div>
@@ -91,6 +93,9 @@ describe("ServiceDetailDrawer configure integration", () => {
 		expect(screen.queryByTestId("variables")).not.toBeInTheDocument();
 		view.rerender(<ConfigurePanel {...props} section="runtime" />);
 		expect(screen.getByTestId("service-settings-runtime")).toHaveAttribute("data-authority", "human");
+		view.rerender(<ConfigurePanel {...props} section="source" />);
+		expect(screen.getByTestId("service-source-panel")).toHaveTextContent("prj_1:svc_1");
+		expect(screen.getByTestId("service-source-panel")).toHaveAttribute("data-environment", "env_1");
 		view.rerender(<ConfigurePanel serviceId="svc_1" authority="human" section="variables" />);
 		expect(screen.queryByTestId("variables")).not.toBeInTheDocument();
 		expect(screen.getByText(/A concrete project and environment are required/)).toBeVisible();

@@ -18,6 +18,11 @@ correspond to individual public commits. See [Public Git History](README.md#publ
   missing Vite GraphQL proxy; no running workload is invented by the tests.
 - Kept `midnight up` follow timeouts resumable when SSE connection setup hits
   its deadline, using REST status before reporting a deployment failure.
+- Corrected namespaced Buildctl image targets to use the configured registry,
+  including the returned image reference and provenance/SBOM subject.
+- Kept human administrators on tenant changeset and variable authority, refreshed
+  tenant metadata after apply, restored the Changes advanced menu, and added
+  required runtime-write preconditions and stale-write reload recovery.
 - Retried membership transactions after PostgreSQL serialization/deadlock
   conflicts so a losing conditional writer receives the typed version
   conflict. Canceling or failing a build with no recorded start leaves its

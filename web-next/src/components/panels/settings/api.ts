@@ -144,7 +144,10 @@ export async function putServiceConfig(
 		{
 			auth: input.authority,
 			method: "PUT",
-			headers: { "Idempotency-Key": input.idempotencyKey },
+			headers: {
+				"Idempotency-Key": input.idempotencyKey,
+				"If-Match": `"${input.config.expected_version}"`,
+			},
 			body: input.config,
 		},
 	);

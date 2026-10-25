@@ -1,9 +1,13 @@
 # Integration Tests
 
-Run `bash scripts/ci/integration-gate.sh` with Docker, Go, and jq installed.
+Run `bash scripts/ci/integration-gate.sh` with Docker, Go, jq, and Python 3 installed.
 The gate builds a MinIO S3 fixture from an exact upstream source revision,
 runs the integration-tagged suite, and rejects skips for required durable
 journeys. Optional provider checks retain their own opt-ins and skip ledger.
+Each Go test executable gets a fresh Testcontainers session, so an expired
+reaper from an earlier package cannot break startup. Container cleanup stays
+enabled. CI also requires real conversation persistence against its disposable
+PostgreSQL database; paid model calls remain a separate check.
 
 The separate Linux runtime gate exercises actual BuildKit/registry and
 Traefik processes:

@@ -52,7 +52,9 @@ test("enrolls a real administrator, applies encrypted variables and runtime chan
   expect(environmentId).toBeTruthy();
   const servicePath = `/api/v1alpha/services/${serviceId}/environments/${environmentId}`;
   const changesetPath = `/api/v1alpha/environments/${environmentId}/changeset`;
-  await page.goto(`/projects/${projectId}/services/${serviceId}/configure?env=${environmentId}&configure=variables`);
+  await page.goto(`/projects/${projectId}/services/${serviceId}/configure?env=${environmentId}&configure=source`);
+  await expect(page.getByText("No GitHub source is linked", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "Variables", exact: true }).click();
   await page.getByRole("button", { name: "+ Add variable", exact: true }).click();
   const addVariable = page.getByRole("form", { name: "Add service variable" });
   await addVariable.getByLabel("Variable name", { exact: true }).fill("BROWSER_SECRET");

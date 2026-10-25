@@ -57,9 +57,10 @@ bash scripts/ci/live-runtime-gate.sh
 (cd web-next && npx playwright test --config playwright.postgres.config.ts)
 ```
 
-The integration gate needs Docker, Go, and jq. It builds the S3 test server
+The integration gate needs Docker, Go, jq, and Python 3. It builds the S3 test server
 from pinned MinIO source because the old Docker Hub/Quay binary images are
-unavailable, runs all integration-tagged packages, and requires actual pass
+unavailable, runs all integration-tagged packages with an independent reaper
+session per executable, and requires actual pass
 events for durable boot/restart, source intake/materialization, Docker
 one-off/volume replacement, and S3/sealed-credential round trips. Supplying
 `MIDNIGHT_IDENTITY_TEST_DSN` also makes its administrator-recovery canary

@@ -654,9 +654,11 @@ function SetupStep({
 export function HumanServiceSourceConfigure({
   serviceId,
   projectId,
+  environmentId,
 }: {
   serviceId: string;
   projectId?: string;
+  environmentId?: string;
 }) {
   if (!projectId) {
     return (
@@ -667,7 +669,7 @@ export function HumanServiceSourceConfigure({
       />
     );
   }
-  return <ServiceSourcePanel projectId={projectId} serviceId={serviceId} />;
+  return <ServiceSourcePanel projectId={projectId} serviceId={serviceId} environmentId={environmentId} />;
 }
 
 export function HumanServiceConfigure({
@@ -695,6 +697,7 @@ export function HumanServiceConfigure({
         <HumanServiceSourceConfigure
           projectId={projectId}
           serviceId={serviceId}
+          environmentId={environmentId}
         />
       ) : section === "variables" ? (
         projectId && environmentId ? (
@@ -761,7 +764,13 @@ export function ConfigurePanel({
         onSectionChange={onSectionChange}
       />
 
-      {section === "source" ? (
+      {section === "source" && authority === "human" ? (
+        <HumanServiceSourceConfigure
+          projectId={projectId}
+          serviceId={serviceId}
+          environmentId={environmentId}
+        />
+      ) : section === "source" ? (
         <CapabilityBoundary
           state="unavailable"
           title="Source connection"

@@ -39,6 +39,7 @@ jobs:
         run: |
           bash scripts/mvp-acceptance_test.sh
           bash scripts/ci/local-gate_test.sh
+          bash scripts/ci/integration-test-exec_test.sh
 
   workflow-lint:
     name: workflow-lint

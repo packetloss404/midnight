@@ -4,7 +4,7 @@
 set -euo pipefail
 
 cd "$(git rev-parse --show-toplevel)"
-for required in docker go jq; do
+for required in docker go jq python3; do
   command -v "$required" >/dev/null || {
     echo "integration gate: required command not found: $required" >&2
     exit 2
@@ -17,10 +17,13 @@ docker pull postgres:16-alpine
 docker build -t midnight-test-minio:7aac2a2c5b7c test/integration/minio
 mkdir -p artifacts/ci-integration
 results=artifacts/ci-integration/results.jsonl
+if [[ -n "${MIDNIGHT_IDENTITY_TEST_DSN:-}" && -z "${MIDNIGHT_TEST_PG_DSN:-}" ]]; then
+  export MIDNIGHT_TEST_PG_DSN="$MIDNIGHT_IDENTITY_TEST_DSN"
+fi
 set +e
-# Testcontainers packages share a Docker reaper; serialize package startup so
-# concurrent first clients cannot race its handshake and lose cleanup ownership.
-GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 1 -tags=integration -json -count=1 -timeout=20m ./... | tee "$results"
+# Isolate each test executable's reaper session; never disable Docker cleanup.
+GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 1 -exec "$PWD/scripts/ci/integration-test-exec.sh" \
+  -tags=integration -json -count=1 -timeout=20m ./... | tee "$results"
 pipeline_status=("${PIPESTATUS[@]}")
 test_exit=${pipeline_status[0]}
 evidence_exit=${pipeline_status[1]}
@@ -58,6 +61,11 @@ required_tests=(
 if [[ -n "${MIDNIGHT_IDENTITY_TEST_DSN:-}" ]]; then
   required_tests+=(
     'github.com/midnight/midnight/internal/identity TestPostgresAdministratorRecoveryResetsCredentialsAndClosesSessions'
+  )
+fi
+if [[ -n "${MIDNIGHT_TEST_PG_DSN:-}" ]]; then
+  required_tests+=(
+    'github.com/midnight/midnight/internal/agent/conversation TestPostgresStoreHappyPath'
   )
 fi
 passed=$(jq -r 'select(.Action == "pass" and .Test != null) | .Package + " " + .Test' "$results")

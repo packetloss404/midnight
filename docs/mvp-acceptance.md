@@ -200,6 +200,10 @@ node agent, container, or ingress, read real application logs, or use a browser;
 it proves API/CLI/projection agreement only. Browser workflows are a separate
 gate described in [feature verification](feature-verification.md).
 
+Final installed acceptance requires that Dashboard/API/CLI agree on live
+state. The runner's synthetic observations establish only the API/CLI and
+dashboard-projection portion; they do not establish runtime agreement.
+
 ## Human-Session Generated Domain Check
 
 This check uses the same human-session-only contract as the console. It creates
