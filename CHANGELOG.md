@@ -8,6 +8,12 @@ correspond to individual public commits. See [Public Git History](README.md#publ
 
 ## Unreleased
 
+### Fixed (2026-10-24, public dependency scan)
+
+- Updated Vitest and its development-only packages to 4.1.12 to address two
+  `@vitest/mocker` advisories reported after the public repository opened.
+  Production npm dependencies remain free of reported vulnerabilities.
+
 ### Fixed (2026-10-06, release-candidate checks)
 
 - Made installation-domain updates use the stable API's strong ETag and
