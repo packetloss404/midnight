@@ -235,6 +235,9 @@ func (r BuildctlRunner) Build(ctx context.Context, inv BuildctlInvocation) (Buil
 	if err := inv.Validate(); err != nil {
 		return BuildctlResult{}, err
 	}
+	// The returned image and its evidence must identify the same repository
+	// that the exporter actually pushes to.
+	inv.Image = buildctlImageRef(inv)
 	startedAt := r.now()
 	if err := os.MkdirAll(inv.OutputDir, 0o750); err != nil {
 		return BuildctlResult{}, fmt.Errorf("buildctl: create output dir: %w", err)

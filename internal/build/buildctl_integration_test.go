@@ -78,6 +78,9 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first build: %v", err)
 	}
+	if want := strings.TrimSuffix(registry, "/") + "/" + inv.Image; res1.Image != want {
+		t.Fatalf("returned image = %q, want pushed repository %q", res1.Image, want)
+	}
 
 	inv.OutputDir = out2
 	res2, err := runner.Build(ctx, inv)

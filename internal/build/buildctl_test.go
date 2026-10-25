@@ -144,6 +144,9 @@ func TestBuildEmitsProvenanceSBOMAndDigestDeterministically(t *testing.T) {
 	if res.Digest != digest {
 		t.Fatalf("digest = %q, want %q", res.Digest, digest)
 	}
+	if res.Image != "registry.midnight.local:5000/midnight/demo:phase1" {
+		t.Fatalf("returned image = %q, want the actual registry push target", res.Image)
+	}
 	if res.BuildKitVer != RequiredBuildKitVersion {
 		t.Fatalf("BuildKitVer = %q, want %q", res.BuildKitVer, RequiredBuildKitVersion)
 	}
@@ -158,6 +161,9 @@ func TestBuildEmitsProvenanceSBOMAndDigestDeterministically(t *testing.T) {
 	}
 	if stmt.Predicate.RunDetails.Builder.ID != "midnight-buildkit/"+RequiredBuildKitVersion {
 		t.Fatalf("builder id = %q", stmt.Predicate.RunDetails.Builder.ID)
+	}
+	if len(stmt.Subject) != 1 || stmt.Subject[0].Name != res.Image {
+		t.Fatalf("provenance subject = %#v, want returned push target %q", stmt.Subject, res.Image)
 	}
 	if len(stmt.Predicate.BuildDefinition.ResolvedDependencies) != 1 {
 		t.Fatalf("resolved deps = %d, want 1", len(stmt.Predicate.BuildDefinition.ResolvedDependencies))
