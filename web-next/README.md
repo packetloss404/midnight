@@ -8,13 +8,37 @@ the in-app documentation, and the optional agent panel.
 ## Scripts
 
 ```
-npm run dev         # vite dev server (proxies /api → http://localhost:8080)
+npm run dev         # vite dev server (proxies /api and /graphql → http://localhost:8080)
 npm run build       # production build
 npm run typecheck   # tsc --noEmit
 npm run test        # vitest
 npm run test:e2e    # Playwright browser tests
 npm run test:gate0  # typecheck, unit tests, build, and browser tests
 ```
+
+The default browser suite starts a throwaway Go memory API on
+`127.0.0.1:4180` and Vite on `127.0.0.1:4173`; both ports must be free. Install
+Chromium with `npm run test:e2e:install` first. `MIDNIGHT_API_PROXY_TARGET`
+selects the upstream API during ordinary Vite development.
+
+`e2e/real-control-plane.e2e.ts` uses actual HTTP requests without request
+interception to create projects/services, reload their state, navigate mobile
+grid/map/inspector views, report unavailable image intake through real GraphQL
+and retry without creating duplicate services, and verify documentation and
+the workspace sign-in boundary. The memory API has no deploy queue, so these
+tests assert a typed failure and zero deployment records. Memory
+data disappears with the test API; durable sessions, Postgres transactions,
+public HTTPS, and backup/restore still require installed-stack acceptance.
+
+Most other browser files use the deterministic API fixture in
+`e2e/support/app.ts` for repeatable interaction, accessibility, and responsive
+checks. They do not prove live backend behavior. `e2e/live-api.e2e.ts` is an
+additional seeded real-API flow run by `scripts/parity-ui-acceptance.sh`;
+security-header checks run against the Go-served built console with
+`scripts/security-headers-browser-test.sh`. Those two files skip in the default
+run unless their explicit environment inputs are present. Setting
+`MIDNIGHT_E2E_BASE_URL` bypasses local server startup and skips the local
+mutation suite to avoid changing an operator's external installation.
 
 ## Agent panel
 

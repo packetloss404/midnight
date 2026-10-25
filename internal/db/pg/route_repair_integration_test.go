@@ -598,8 +598,7 @@ func TestPrivateRouteReconcileSkipsUnchangedDurableAttemptButRepairsArtifact(t *
 
 	artifactPath := filepath.Join(
 		publicationRoot,
-		group.RouteGroup,
-		router.TraefikDynamicArtifactExtension,
+		group.RouteGroup+"."+router.TraefikDynamicArtifactExtension,
 	)
 	if err := os.WriteFile(artifactPath, []byte("corrupted\n"), 0o640); err != nil {
 		t.Fatal(err)

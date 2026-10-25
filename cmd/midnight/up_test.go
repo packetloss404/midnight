@@ -1492,8 +1492,11 @@ func TestStreamOperationEventsDeadlineBeforeResponseHeaders(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
 	go func() {
-		<-requestStarted
-		cancel()
+		select {
+		case <-requestStarted:
+			cancel()
+		case <-ctx.Done():
+		}
 	}()
 	var stdout, stderr bytes.Buffer
 	result := streamOperationEventsOnce(ctx, server.URL, "", "op_1", 7, "midnight up", "deploy", &stdout, &stderr)

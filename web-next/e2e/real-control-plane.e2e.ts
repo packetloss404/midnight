@@ -4,6 +4,7 @@ import { expect, test, type Page } from "@playwright/test";
 // isolated, ephemeral Go API. Never run these mutations against an operator's
 // externally configured URL.
 test.skip(Boolean(process.env.MIDNIGHT_E2E_BASE_URL), "local throwaway API only");
+test.setTimeout(90_000);
 
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
@@ -23,7 +24,7 @@ async function createProject(page: Page, starter = false) {
   }
   await page.getByRole("button", { name: "Create project", exact: true }).click();
   await expect(page).toHaveURL(/\/projects\/[^/?]+/);
-  await expect(page.getByRole("heading", { name: "Resource grid" })).toBeVisible();
+  await expect(page.getByRole("heading", { name, exact: true })).toBeVisible();
   const projectId = new URL(page.url()).pathname.split("/")[2];
   const environmentId = new URL(page.url()).searchParams.get("env");
   expect(environmentId).toBeTruthy();
@@ -49,7 +50,7 @@ test("creates projects and services through the browser and reloads real API sta
 
   await page.setViewportSize({ width: 390, height: 844 });
   await page.goto(`/projects/${projectId}?env=${environmentId}&view=map`);
-  await expect(page.getByRole("region", { name: "Project canvas" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Project topology map" })).toBeVisible();
   await page.getByRole("button", { name: "Grid", exact: true }).click();
   await page.getByRole("button", { name: "Open Browser API" }).click();
   await expect(page.getByRole("complementary", { name: "Browser API" })).toBeVisible();
@@ -57,9 +58,13 @@ test("creates projects and services through the browser and reloads real API sta
   expect(widths.scroll).toBeLessThanOrEqual(widths.client + 1);
 });
 
-test("queues an immutable image through real GraphQL without inventing a running workload", async ({ page, request }) => {
+test("reports unavailable image intake through real GraphQL and retries without duplicate services", async ({ page, request }) => {
   const { projectId, environmentId } = await createProject(page);
-  await page.getByRole("button", { name: "+ Add resource" }).click();
+  let serviceCreates = 0;
+  page.on("request", (request) => {
+    if (request.method() === "POST" && new URL(request.url()).pathname === "/api/v1alpha/services") serviceCreates += 1;
+  });
+  await page.getByRole("button", { name: "+ Add resource" }).first().click();
   await page.getByRole("option", { name: /Container image/i }).click();
   await page.getByPlaceholder("api").fill("Image API");
   const image = `registry.example/browser@sha256:${"a".repeat(64)}`;
@@ -69,17 +74,26 @@ test("queues an immutable image through real GraphQL without inventing a running
   const response = await intake;
   expect(response.headers()["content-type"]).toContain("application/json");
   const result = await response.json();
-  expect(result.errors).toBeUndefined();
-  expect(result.data.serviceInstanceDeployV2.status.toLowerCase()).toBe("queued");
-  await expect(page).toHaveURL(/\/services\/[^/]+\/overview/);
-  const serviceId = new URL(page.url()).pathname.split("/")[4];
+  expect(result.errors).toEqual([
+    expect.objectContaining({ extensions: expect.objectContaining({ code: "CAPABILITY_UNAVAILABLE" }) }),
+  ]);
+  await expect(page.getByRole("alert")).toBeVisible();
+  await expect(page.getByText(/was created\. Retry resumes that service/)).toBeVisible();
+  const servicesResponse = await request.get(`/api/v1alpha/services?project_id=${projectId}`);
+  expect(servicesResponse.ok()).toBe(true);
+  const services = await servicesResponse.json();
+  const service = services.find((item: { display_name: string }) => item.display_name === "Image API");
+  expect(service?.project_id).toBe(projectId);
+  const retry = page.waitForResponse((response) => new URL(response.url()).pathname === "/graphql/v2" && response.request().method() === "POST");
+  await page.getByRole("button", { name: "Create and deploy" }).click();
+  expect((await (await retry).json()).errors[0].extensions.code).toBe("CAPABILITY_UNAVAILABLE");
+  expect(serviceCreates).toBe(1);
+  const serviceId = service.id;
   const deployments = await request.get(`/api/v1alpha/services/${serviceId}/deployments?environment_id=${environmentId}&limit=100`);
   expect(deployments.ok()).toBe(true);
   const body = await deployments.json();
-  const deployment = (Array.isArray(body) ? body : body.items)[0];
-  expect(deployment.image).toBe(image);
-  expect(deployment.project_id).toBe(projectId);
-  expect(deployment.active).toBe(false);
+  expect(Array.isArray(body) ? body : body.items).toHaveLength(0);
+  await page.goto(`/projects/${projectId}/services/${serviceId}/overview?env=${environmentId}`);
   await expect(page.getByRole("heading", { name: "No active release" })).toBeVisible();
 });
 

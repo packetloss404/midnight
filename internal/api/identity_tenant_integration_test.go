@@ -31,10 +31,26 @@ func TestPostgresIdentityClaimSessionRestartAndTenantConcealment(t *testing.T) {
 	pool := newBootPool(t, ctx, dsn)
 	defer pool.Close()
 	runner := &pg.MigrationRunner{Pool: pool, FS: migrations.FS, ManifestPath: "manifest.yaml"}
-	if _, err := runner.Up(ctx); err != nil {
+	initial, err := runner.Up(ctx)
+	if err != nil {
 		t.Fatalf("migrate: %v", err)
 	}
-	for _, expectedVersion := range []int{53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39, 38} {
+	if len(initial) == 0 {
+		t.Fatal("fresh database did not apply migrations")
+	}
+	latestVersion := initial[len(initial)-1].Version
+	assertUpgrade := func(firstVersion int, applied []pg.MigrationFile, upgradeErr error) {
+		t.Helper()
+		if upgradeErr != nil || len(applied) != latestVersion-firstVersion+1 {
+			t.Fatalf("upgrade from %d through %d: applied=%#v err=%v", firstVersion, latestVersion, applied, upgradeErr)
+		}
+		for index, migration := range applied {
+			if migration.Version != firstVersion+index {
+				t.Fatalf("upgrade migration %d = %d, want %d", index, migration.Version, firstVersion+index)
+			}
+		}
+	}
+	for expectedVersion := latestVersion; expectedVersion >= 38; expectedVersion-- {
 		down, err := runner.Down(ctx)
 		if err != nil || down == nil || down.Version != expectedVersion {
 			t.Fatalf(
@@ -79,26 +95,7 @@ func TestPostgresIdentityClaimSessionRestartAndTenantConcealment(t *testing.T) {
 		t.Fatalf("seed legacy identity/project state: %v", err)
 	}
 	applied, err := runner.Up(ctx)
-	if err != nil ||
-		len(applied) != 16 ||
-		applied[0].Version != 38 ||
-		applied[1].Version != 39 ||
-		applied[2].Version != 40 ||
-		applied[3].Version != 41 ||
-		applied[4].Version != 42 ||
-		applied[5].Version != 43 ||
-		applied[6].Version != 44 ||
-		applied[7].Version != 45 ||
-		applied[8].Version != 46 ||
-		applied[9].Version != 47 ||
-		applied[10].Version != 48 ||
-		applied[11].Version != 49 ||
-		applied[12].Version != 50 ||
-		applied[13].Version != 51 ||
-		applied[14].Version != 52 ||
-		applied[15].Version != 53 {
-		t.Fatalf("upgrade legacy state: applied=%#v err=%v", applied, err)
-	}
+	assertUpgrade(38, applied, err)
 	var legacyRole string
 	var legacyAccepted *time.Time
 	if err := pool.QueryRow(ctx, `
@@ -131,7 +128,7 @@ func TestPostgresIdentityClaimSessionRestartAndTenantConcealment(t *testing.T) {
 		VALUES ('env_restricted', 'prj_legacy', 'restricted', 'Restricted', 'production', TRUE)`); err != nil {
 		t.Fatal(err)
 	}
-	for _, expectedVersion := range []int{53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40, 39} {
+	for expectedVersion := latestVersion; expectedVersion >= 39; expectedVersion-- {
 		down, err := runner.Down(ctx)
 		if err != nil || down == nil || down.Version != expectedVersion {
 			t.Fatalf(
@@ -148,25 +145,8 @@ func TestPostgresIdentityClaimSessionRestartAndTenantConcealment(t *testing.T) {
 	if _, err := pool.Exec(ctx, `UPDATE environments SET access_restricted=FALSE WHERE id='env_restricted'`); err != nil {
 		t.Fatal(err)
 	}
-	if applied, err := runner.Up(ctx); err != nil ||
-		len(applied) != 15 ||
-		applied[0].Version != 39 ||
-		applied[1].Version != 40 ||
-		applied[2].Version != 41 ||
-		applied[3].Version != 42 ||
-		applied[4].Version != 43 ||
-		applied[5].Version != 44 ||
-		applied[6].Version != 45 ||
-		applied[7].Version != 46 ||
-		applied[8].Version != 47 ||
-		applied[9].Version != 48 ||
-		applied[10].Version != 49 ||
-		applied[11].Version != 50 ||
-		applied[12].Version != 51 ||
-		applied[13].Version != 52 ||
-		applied[14].Version != 53 {
-		t.Fatalf("restore identity follow-up migrations: applied=%#v err=%v", applied, err)
-	}
+	applied, err = runner.Up(ctx)
+	assertUpgrade(39, applied, err)
 
 	now := time.Date(2026, 7, 28, 12, 0, 0, 0, time.UTC)
 	stack := postgresIdentityIntegrationStack(t, pool, now)
@@ -601,7 +581,7 @@ func TestPostgresIdentityClaimSessionRestartAndTenantConcealment(t *testing.T) {
 	if identityAuditRows != 3 {
 		t.Fatalf("durable identity audit rows=%d, want 3", identityAuditRows)
 	}
-	for _, expectedVersion := range []int{53, 52, 51, 50, 49, 48, 47, 46, 45, 44, 43, 42, 41, 40} {
+	for expectedVersion := latestVersion; expectedVersion >= 40; expectedVersion-- {
 		down, err := runner.Down(ctx)
 		if err != nil || down == nil || down.Version != expectedVersion {
 			t.Fatalf(

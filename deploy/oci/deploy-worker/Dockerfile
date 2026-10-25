@@ -12,7 +12,7 @@
 #
 # GO_VERSION must track go.mod (docker-compose.local.yml passes the same
 # ${MIDNIGHT_GO_IMAGE_TAG} it pins x-go-image to).
-ARG GO_VERSION=1.26.9
+ARG GO_VERSION=1.26.10
 
 FROM golang:${GO_VERSION}-bookworm
 

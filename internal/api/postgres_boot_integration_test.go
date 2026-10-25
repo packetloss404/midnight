@@ -39,6 +39,11 @@ func TestPostgresBootPersistsAcrossPoolRouterRebuild(t *testing.T) {
 	t.Cleanup(func() { _ = container.Terminate(ctx) })
 
 	pool1 := newBootPool(t, ctx, dsn)
+	// Production applies the schema before constructing stores that load
+	// persisted settings. Exercise the same fresh-database boot order here.
+	if _, err := (&pg.MigrationRunner{Pool: pool1, FS: migrations.FS, ManifestPath: "manifest.yaml"}).Up(ctx); err != nil {
+		t.Fatalf("initial migrations: %v", err)
+	}
 	router1 := newPostgresBootRouter(t, pool1)
 	compat := doRouterJSON[version.Compatibility](t, router1, http.MethodGet, "/api/v1alpha/compat", "", nil, http.StatusOK)
 	if compat.APIVersion != version.APIVersion || compat.SchemaVersion != version.SchemaVersion {

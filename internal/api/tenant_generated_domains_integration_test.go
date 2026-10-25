@@ -115,7 +115,7 @@ func TestTenantGeneratedDomainLifecycleAndCurrentActiveAttachment(t *testing.T) 
 		if key != "" {
 			headers["Idempotency-Key"] = key
 		}
-		response := doRouterRequest(handler, method, path, body, headers)
+		response := doRouterRequest(handler, method, path, body, integrationVersionHeaders(body, headers))
 		return &routerResponse{
 			Code: response.Code, Body: response.Body.String(),
 			Header: response.Header(),
@@ -404,7 +404,7 @@ func TestTenantGeneratedDomainLifecycleAndCurrentActiveAttachment(t *testing.T) 
 		"domain-idle-stale",
 		`{"expected_version":2}`,
 	)
-	if stale.Code != http.StatusConflict ||
+	if stale.Code != http.StatusPreconditionFailed ||
 		!strings.Contains(stale.Body, `"current_version":3`) {
 		t.Fatalf("stale delete=%#v", stale)
 	}

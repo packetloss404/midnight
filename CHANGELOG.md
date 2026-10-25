@@ -10,16 +10,22 @@ correspond to individual public commits. See [Public Git History](README.md#publ
 
 ### Fixed (2026-10-25, feature verification)
 
+- Updated the pinned Go toolchain to 1.26.10 to address the `crypto/x509`
+  vulnerability GO-2026-6809 across builds and CI.
 - Added default browser journeys against a real local Go API for project and
-  service creation, canonical image-deploy intake, responsive inspection,
-  documentation, and unavailable usage. Added the missing Vite GraphQL proxy;
-  queued intake remains explicitly separate from running-workload proof.
+  service creation, typed unavailable image-deploy intake in memory mode,
+  responsive inspection, documentation, and unavailable usage. Added the
+  missing Vite GraphQL proxy; no running workload is invented by the tests.
 - Kept `midnight up` follow timeouts resumable when SSE connection setup hits
   its deadline, using REST status before reporting a deployment failure.
 - Corrected the MVP runner's obsolete dashboard directory and replaced the
   legacy template queue assertion with canonical PostgreSQL provisioning,
   connectivity, replacement-persistence, and cleanup checks. Added runner
   regression coverage for failed, incomplete, timed-out, and unsafe replies.
+- Made real-app acceptance select exact project/service/environment IDs and
+  an existing managed domain, poll terminal operation state, and require the
+  matching canonical active deployment plus an identifying HTTPS response.
+  Saved HTTP/TLS policy is preserved when HTTPS terminates at an external edge.
 - Added a Docker/PostgreSQL CI gate that requires real durable canaries and
   records skipped tests. Published a feature verification ledger, corrected
   the pinned Go version, and clarified that backup metadata/restore plans and

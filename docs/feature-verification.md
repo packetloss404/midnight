@@ -19,8 +19,9 @@ commit-bound evidence.
   `web-next/e2e/real-control-plane.e2e.ts` makes actual HTTP requests through
   Vite to a Playwright-owned Go memory server, without request interception.
   Projects/services survive a browser reload, not an API-process restart.
-  Its image journey proves queued intake, not image pull, container health,
-  traffic, or rollout completion. It deliberately skips against an external
+  Its image journey requires the memory API's typed unavailable response for
+  durable deployment intake; it does not prove a queued deployment, image
+  pull, container health, traffic, or rollout completion. It skips against an external
   URL so test mutations cannot touch an operator installation.
 - **Durable integration:** `-tags=integration` enables disposable PostgreSQL
   and Docker tests. Read their pass/skip events; Go may exit successfully
@@ -40,8 +41,9 @@ commit-bound evidence.
   tokens, and recovery have handler/CLI/PostgreSQL coverage; this browser
   lane uses memory developer mode and does not prove a durable human login.
 - **Image deployment and actions.** The real browser submits a digest-pinned
-  image through `/graphql/v2`, checks canonical REST deployment state, and
-  requires queued/inactive truth. Backend intake/actions/cancellation and
+  image through `/graphql/v2`, requires a typed unavailable result in memory
+  mode, and checks that canonical REST state has no invented deployment.
+  Backend intake/actions/cancellation and
   transition tests cover authorization and state behavior. Real image pull,
   healthy promotion, restart, stop/remove, rollback, and public traffic still
   require the worker and installed `real-app`/recovery drills.
@@ -88,7 +90,7 @@ commit-bound evidence.
 - **Lease queue and canonical deployment FSM.** Queue contracts, worker
   tests, migration checks, and PostgreSQL integration tests cover locking,
   leases, attempts, durable operations, legal transitions, and fencing. The
-  browser's queued row does not prove dequeue or successful promotion.
+  browser's unavailable-intake assertion does not prove dequeue or promotion.
 - **Audit ledger.** Hash-chain/CLI tests and PostgreSQL integration tests
   cover canonical rows, serialization, verification, export, and scoped
   pagination. `surface-agreement` checks real API projections using local

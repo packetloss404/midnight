@@ -594,15 +594,21 @@ func TestTenantOperationCancelAtomicAuthorizationAndWorkerFence(
 		t.Fatalf("worker safe-point operation = %#v", operation)
 	}
 	var safeOperation, safeDeployment, safeMessage string
+	var safeBuildStarted, safeBuildCompleted *time.Time
 	if err := pool.QueryRow(ctx, `
 		SELECT
 			(SELECT state FROM operations WHERE id='op_cancel_leased'),
 			(SELECT state FROM deployments WHERE id='dep_cancel_leased'),
 			(SELECT message FROM deployment_events
 			 WHERE deployment_id='dep_cancel_leased'
-			 ORDER BY seq DESC LIMIT 1)`,
-	).Scan(&safeOperation, &safeDeployment, &safeMessage); err != nil {
+			 ORDER BY seq DESC LIMIT 1),
+			(SELECT build_started_at FROM deployments WHERE id='dep_cancel_leased'),
+			(SELECT build_completed_at FROM deployments WHERE id='dep_cancel_leased')`,
+	).Scan(&safeOperation, &safeDeployment, &safeMessage, &safeBuildStarted, &safeBuildCompleted); err != nil {
 		t.Fatal(err)
+	}
+	if safeBuildStarted != nil || safeBuildCompleted != nil {
+		t.Fatalf("cancellation fabricated missing build-window evidence: start=%v complete=%v", safeBuildStarted, safeBuildCompleted)
 	}
 	if safeOperation != "CANCELED" ||
 		safeDeployment != "canceled" ||

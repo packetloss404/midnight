@@ -370,6 +370,18 @@ func TestPostgresInvitationReplacementLifecycle(t *testing.T) {
 		t.Fatalf("conditional invitation after race=%+v err=%v", durableConditional, err)
 	}
 
+	// The replacement-history refusal belongs to migration 43, not to the
+	// latest migration in the evolving repository manifest.
+	migrationHistory, err := pg.ListApplied(ctx, pool)
+	if err != nil || len(migrationHistory) == 0 {
+		t.Fatalf("list applied migrations: %v", err)
+	}
+	for index := len(migrationHistory) - 1; index >= 0 && migrationHistory[index].Version > 43; index-- {
+		down, err := runner.Down(ctx)
+		if err != nil || down == nil || down.Version != migrationHistory[index].Version {
+			t.Fatalf("rollback later migration %d: result=%#v err=%v", migrationHistory[index].Version, down, err)
+		}
+	}
 	if _, err := runner.Down(ctx); err == nil ||
 		!strings.Contains(err.Error(), "replacement history exists") {
 		t.Fatalf("history-preserving migration down error = %v", err)

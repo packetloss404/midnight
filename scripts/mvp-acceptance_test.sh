@@ -17,7 +17,16 @@ cat >"$scratch/bin/curl" <<'STUB'
 #!/usr/bin/env bash
 set -euo pipefail
 printf '%s\n' "$*" >>"$STUB_LOG"
-url="${!#}"
+url="" output="" data="" next=""
+for argument in "$@"; do
+  if [[ "$next" == output ]]; then output="$argument"; next=""; continue; fi
+  if [[ "$next" == data ]]; then data="$argument"; next=""; continue; fi
+  case "$argument" in
+    -o) next=output ;;
+    --data) next=data ;;
+    http://*|https://*) url="$argument" ;;
+  esac
+done
 case "$url" in
   */projects) printf '{"id":"prj_test"}\n' ;;
   */templates/postgres/instances)
@@ -39,11 +48,50 @@ case "$url" in
     esac
     printf '{"state":"%s","connectivity_verified":true,"persistence_verified":%s,"cleanup_completed":true}\n' "$state" "$verified"
     ;;
+  */services\?project_id=prj_app)
+    printf '[{"id":"svc_app","project_id":"%s"}]\n' "${STUB_APP_PROJECT:-prj_app}"
+    ;;
+  */environments\?project_id=prj_app) printf '[{"id":"env_app","project_id":"prj_app"}]\n' ;;
+  */services/svc_app/environments/env_app/domains|*/domains\?project_id=prj_app\&environment_id=env_app\&service_id=svc_app)
+    host="${STUB_APP_HOST:-app.example.test}"
+    if [[ "$url" == *environments/env_app/domains ]]; then
+      printf '[{"id":"dom_app","project_id":"prj_app","service_id":"svc_app","environment_id":"env_app","kind":"generated","hostname":"%s","path":"/","public":true,"tls":false,"route_apply_state":"ready","route_reachable":true}]\n' "$host"
+    else
+      printf '[{"id":"dom_app","project_id":"prj_app","service_id":"svc_app","environment_id":"env_app","kind":"%s","hostname":"%s","tls_desired":false,"apply_state":"ready","reachable":true,"routes":[{"name":"saved-route","path_prefix":"/","public":true}]}]\n' "${STUB_APP_DOMAIN_KIND:-generated}" "$host"
+    fi
+    ;;
+  */services/svc_app/deployments)
+    jq -e '.environment_id == "env_app" and .route.public == true and .route.tls != true and (.image | endswith("@sha256:" + ("a" * 64)))' "${data#@}" >/dev/null
+    if [[ "${STUB_APP_HUMAN:-false}" == true ]]; then
+      jq -e '.route == {public:true}' "${data#@}" >/dev/null
+    elif [[ "${STUB_APP_DOMAIN_KIND:-generated}" == custom ]]; then
+      jq -e '.route.name == "saved-route" and .route.host == "app.example.test"' "${data#@}" >/dev/null
+    else
+      jq -e '.route.name == "saved-route" and (.route | has("host") | not)' "${data#@}" >/dev/null
+    fi
+    printf '{"id":"op_app","kind":"deploy","state":"QUEUED"}\n'
+    ;;
+  */operations/op_app)
+    case "${STUB_APP_SCENARIO:-success}" in
+      failed) state=FAILED ;;
+      timeout) state=RUNNING ;;
+      *) state=SUCCEEDED ;;
+    esac
+    printf '{"id":"op_app","kind":"deploy","state":"%s","message":"old event said SUCCEEDED"}\n' "$state"
+    ;;
+  */services/svc_app/deployments/latest-active\?environment_id=env_app)
+    printf '{"id":"dep_app","operation_id":"%s","project_id":"prj_app","service_id":"svc_app","environment_id":"env_app","image":"registry.example/app@sha256:%s","status":"ACTIVE","active":true}\n' "${STUB_APP_OPERATION:-op_app}" "$(printf '%064d' 0 | tr 0 a)"
+    ;;
+  https://app.example.test/)
+    printf '%s\n' "${STUB_APP_BODY:-expected app marker}" >"$output"
+    ;;
   *) echo "unexpected acceptance route: $url" >&2; exit 22 ;;
 esac
 STUB
 printf '#!/usr/bin/env bash\nexit 0\n' >"$scratch/bin/sleep"
-chmod +x "$scratch/bin/curl" "$scratch/bin/sleep"
+printf '#!/usr/bin/env bash\nif [[ "$1" == x509 ]]; then cat >/dev/null; fi\nprintf "certificate metadata\\n"\n' >"$scratch/bin/openssl"
+printf '#!/usr/bin/env bash\nshift\nexec "$@"\n' >"$scratch/bin/timeout"
+chmod +x "$scratch/bin/curl" "$scratch/bin/sleep" "$scratch/bin/openssl" "$scratch/bin/timeout"
 export PATH="$scratch/bin:$PATH"
 export STUB_LOG="$scratch/requests.log" STUB_COUNT="$scratch/polls"
 export MIDNIGHT_API_BASE=http://127.0.0.1:18080
@@ -85,4 +133,46 @@ unset STUB_STATUS_URL
 export MVP_TEMPLATE_POLL_ATTEMPTS=0
 if run_case; then fail "zero poll budget passed"; fi
 [[ ! -s "$STUB_LOG" ]] || fail "invalid budget mutated the server"
+
+export MVP_PROJECT_ID=prj_app MVP_SERVICE_ID=svc_app MVP_ENVIRONMENT_ID=env_app
+export MVP_PUBLIC_HOST=app.example.test MVP_PUBLIC_PATH=/ MVP_APP_POLL_ATTEMPTS=2
+export MVP_IMAGE="registry.example/app@sha256:$(printf '%064d' 0 | tr 0 a)"
+export MVP_EXPECTED_RESPONSE='expected app marker'
+run_app_case() {
+  rm -f "$STUB_LOG"
+  bash "$ROOT_DIR/scripts/mvp-acceptance.sh" real-app >"$scratch/output" 2>&1
+}
+run_app_case || { cat "$scratch/output" >&2; fail "exact scoped real-app contract did not pass"; }
+grep -Fq 'real-app: PASS' "$scratch/output" || fail "missing real-app verdict"
+if grep -Fq '/events' "$STUB_LOG"; then fail "real-app still regex-polls event text"; fi
+export STUB_APP_DOMAIN_KIND=custom
+run_app_case || fail "saved custom route selector did not pass"
+unset STUB_APP_DOMAIN_KIND
+export MIDNIGHT_API_TOKEN=midn_user_contract STUB_APP_HUMAN=true
+run_app_case || fail "human generated-domain contract did not pass"
+export MIDNIGHT_API_TOKEN=local-contract-token
+unset STUB_APP_HUMAN
+
+for scenario in failed timeout; do
+  export STUB_APP_SCENARIO="$scenario"
+  if run_app_case; then fail "real-app $scenario incorrectly passed despite event text"; fi
+done
+unset STUB_APP_SCENARIO
+export STUB_APP_PROJECT=prj_other
+if run_app_case; then fail "real-app cross-project service passed"; fi
+if grep -Fq 'Idempotency-Key: mvp-deploy-' "$STUB_LOG"; then fail "real-app mutated a mismatched scope"; fi
+unset STUB_APP_PROJECT
+export STUB_APP_HOST=other.example.test
+if run_app_case; then fail "real-app missing managed hostname passed"; fi
+if grep -Fq 'Idempotency-Key: mvp-deploy-' "$STUB_LOG"; then fail "real-app invented an unmanaged route"; fi
+unset STUB_APP_HOST
+export STUB_APP_OPERATION=op_old
+if run_app_case; then fail "real-app unrelated active deployment passed"; fi
+unset STUB_APP_OPERATION
+export STUB_APP_BODY='different application'
+if run_app_case; then fail "real-app wrong public response passed"; fi
+unset STUB_APP_BODY
+export MVP_APP_POLL_ATTEMPTS=0
+if run_app_case; then fail "real-app zero poll budget passed"; fi
+[[ ! -s "$STUB_LOG" ]] || fail "invalid real-app budget requested API data"
 echo "mvp-acceptance contract test: PASS"

@@ -590,6 +590,16 @@ func TestPostgresDeliveryStoreLeaseFencingAndSchemaAlignment(t *testing.T) {
 			FS:           migrations.FS,
 			ManifestPath: "manifest.yaml",
 		}
+		migrationHistory, err := dbpg.ListApplied(ctx, pool)
+		if err != nil || len(migrationHistory) == 0 {
+			t.Fatalf("list applied migrations: %v", err)
+		}
+		for index := len(migrationHistory) - 1; index >= 0 && migrationHistory[index].Version > 50; index-- {
+			down, err := runner.Down(ctx)
+			if err != nil || down == nil || down.Version != migrationHistory[index].Version {
+				t.Fatalf("rollback later migration %d: result=%#v err=%v", migrationHistory[index].Version, down, err)
+			}
+		}
 		rolledBack, err := runner.Down(ctx)
 		if err == nil || !strings.Contains(err.Error(), "rollback refused") {
 			t.Fatalf("down migration result=%#v error=%v, want refusal", rolledBack, err)

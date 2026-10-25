@@ -11,14 +11,41 @@ for required in docker go jq; do
   }
 done
 docker info >/dev/null
+# Keep cold pulls outside individual test startup budgets.
+docker pull testcontainers/ryuk:0.14.0
+docker pull postgres:16-alpine
+docker build -t midnight-test-minio:7aac2a2c5b7c test/integration/minio
 mkdir -p artifacts/ci-integration
 results=artifacts/ci-integration/results.jsonl
+set +e
 GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 2 -tags=integration -json -count=1 -timeout=20m ./... | tee "$results"
+test_exit=${PIPESTATUS[0]}
+set -e
+
+jq -r 'select(.Action == "skip" and .Test != null) | .Package + " " + .Test' "$results" \
+  > artifacts/ci-integration/skipped-tests.txt
+skipped=$(wc -l < artifacts/ci-integration/skipped-tests.txt)
+echo "integration gate: $skipped tests skipped (see artifacts/ci-integration/skipped-tests.txt)"
+if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
+  {
+    echo '### Docker/Postgres integration'
+    echo "Go test exit code: $test_exit. Skipped tests: $skipped. Skips are not end-to-end acceptance evidence."
+    echo '```text'
+    cat artifacts/ci-integration/skipped-tests.txt
+    echo '```'
+  } >> "$GITHUB_STEP_SUMMARY"
+fi
+if ((test_exit != 0)); then
+  exit "$test_exit"
+fi
 
 required_tests=(
   'github.com/midnight/midnight/internal/api TestPostgresBootPersistsAcrossPoolRouterRebuild'
   'github.com/midnight/midnight/cmd/midnight-buildkit TestTenantSourceUpHTTPOutboxWorkerMaterializationAndRelease'
   'github.com/midnight/midnight/internal/volume TestManagerPersistsBytesAcrossRealDockerContainerReplacement'
+  'github.com/midnight/midnight/internal/runtime/docker TestRunOneOffAgainstDockerSurvivesAdapterRestartWithoutRerun'
+  'github.com/midnight/midnight/internal/backup TestS3DestinationAgainstMinIO'
+  'github.com/midnight/midnight/internal/backup TestSealedCredentialEndToEndAgainstMinIO'
 )
 if [[ -n "${MIDNIGHT_IDENTITY_TEST_DSN:-}" ]]; then
   required_tests+=(
@@ -33,17 +60,9 @@ for required_test in "${required_tests[@]}"; do
   fi
 done
 
-jq -r 'select(.Action == "skip" and .Test != null) | .Package + " " + .Test' "$results" \
-  > artifacts/ci-integration/skipped-tests.txt
-skipped=$(wc -l < artifacts/ci-integration/skipped-tests.txt)
-echo "integration gate: PASS; $skipped tests skipped (see artifacts/ci-integration/skipped-tests.txt)"
+echo 'integration gate: PASS; required durable canaries executed successfully'
 if [[ -n "${GITHUB_STEP_SUMMARY:-}" ]]; then
   {
-    echo '### Docker/Postgres integration'
     echo 'Durable boot/restart, HTTP source-to-worker, and real volume replacement canaries passed.'
-    echo "Skipped tests: $skipped. These are not end-to-end acceptance evidence."
-    echo '```text'
-    cat artifacts/ci-integration/skipped-tests.txt
-    echo '```'
   } >> "$GITHUB_STEP_SUMMARY"
 fi

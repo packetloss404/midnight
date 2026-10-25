@@ -39,7 +39,7 @@ func TestPostgresOperationListPageUsesCreatedAtIDKeyset(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if created.CreatedAt != createdAt || created.UpdatedAt != createdAt {
+		if !created.CreatedAt.Equal(createdAt) || !created.UpdatedAt.Equal(createdAt) {
 			t.Fatalf("operation timestamps = %s/%s, want %s", created.CreatedAt, created.UpdatedAt, createdAt)
 		}
 	}

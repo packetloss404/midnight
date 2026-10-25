@@ -28,7 +28,7 @@ name: ${COMPOSE_PROJECT_NAME:-midnight-local}
 # then falls back to $MIDNIGHT_DATABASE_URL.
 x-database-url: &database-url ${MIDNIGHT_DATABASE_URL:-postgresql://${MIDNIGHT_POSTGRES_USER:-midnight}:${MIDNIGHT_POSTGRES_PASSWORD:-midnight}@postgres:5432/${MIDNIGHT_POSTGRES_DB:-midnight}?sslmode=disable}
 
-x-go-image: &go-image golang:${MIDNIGHT_GO_IMAGE_TAG:-1.26.9}-bookworm
+x-go-image: &go-image golang:${MIDNIGHT_GO_IMAGE_TAG:-1.26.10}-bookworm
 
 x-go-volumes: &go-volumes
   - type: bind
@@ -297,7 +297,7 @@ services:
       context: .
       dockerfile: deploy/oci/deploy-worker/Dockerfile
       args:
-        GO_VERSION: ${MIDNIGHT_GO_IMAGE_TAG:-1.26.9}
+        GO_VERSION: ${MIDNIGHT_GO_IMAGE_TAG:-1.26.10}
     container_name: midnight-deploy-worker
     restart: unless-stopped
     working_dir: /workspace

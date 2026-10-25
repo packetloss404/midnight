@@ -15,6 +15,9 @@ import (
 	miniotc "github.com/testcontainers/testcontainers-go/modules/minio"
 )
 
+// Built from pinned upstream source by scripts/ci/integration-gate.sh.
+const minioIntegrationImage = "midnight-test-minio:7aac2a2c5b7c"
+
 // TestS3DestinationAgainstMinIO spins up a real MinIO testcontainer
 // and exercises Put → Stat → Get → SignedURL → Delete plus the
 // staleness probe. Default `go test ./...` skips this file because
@@ -31,7 +34,7 @@ func TestS3DestinationAgainstMinIO(t *testing.T) {
 	const secretKey = "midnight-test-secret"
 	const bucket = "midnight-backups"
 
-	mc, err := miniotc.Run(ctx, "minio/minio:RELEASE.2025-04-08T15-41-24Z",
+	mc, err := miniotc.Run(ctx, minioIntegrationImage,
 		miniotc.WithUsername(accessKey),
 		miniotc.WithPassword(secretKey),
 	)

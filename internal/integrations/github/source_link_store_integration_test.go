@@ -64,8 +64,12 @@ func TestSourceLinkStoreCanonicalPersistenceAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrations up: %v", err)
 	}
-	if len(applied) == 0 || applied[len(applied)-1].Version != 50 {
-		t.Fatalf("latest migration = %#v, want 50", applied)
+	_, manifest, err := dbpg.LoadOrderedMigrations(migrations.FS, "manifest.yaml")
+	if err != nil {
+		t.Fatalf("load current migration manifest: %v", err)
+	}
+	if len(applied) != manifest.SchemaVersion || applied[len(applied)-1].Version != manifest.SchemaVersion {
+		t.Fatalf("applied migrations = %#v, want complete schema %d", applied, manifest.SchemaVersion)
 	}
 
 	if _, err := pool.Exec(ctx, `

@@ -193,10 +193,10 @@ func TestTenantServiceConfigAuthorizationReplayRollbackAndSnapshot(t *testing.T)
 			http.MethodPut,
 			tenantServiceConfigIdempotencyPath(serviceID, environmentID),
 			body,
-			map[string]string{
+			integrationVersionHeaders(body, map[string]string{
 				"Authorization":   "Bearer " + token,
 				"Idempotency-Key": key,
-			},
+			}),
 		)
 		return tenantServiceConfigHTTPResponse{
 			Code:     response.Code,
@@ -611,7 +611,7 @@ func TestTenantServiceConfigAuthorizationReplayRollbackAndSnapshot(t *testing.T)
 		"env_config_main",
 		casBody,
 	)
-	if casConflict.Code != http.StatusConflict ||
+	if casConflict.Code != http.StatusPreconditionFailed ||
 		casConflict.Replayed != "" ||
 		casReplay.Code != casConflict.Code ||
 		casReplay.Body != casConflict.Body ||

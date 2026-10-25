@@ -59,7 +59,7 @@ test("uses the seeded real API for mobile grid, map, and inspector flows", async
 
   await page.getByRole("button", { name: "Map" }).click();
   await expect(page).toHaveURL(/view=map/);
-  await expect(page.getByRole("region", { name: "Project canvas" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Project topology map" })).toBeVisible();
   if (evidenceDir) {
     await page.screenshot({
       path: join(evidenceDir, "mobile-map.png"),

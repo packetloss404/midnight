@@ -378,115 +378,87 @@ Now run the package template deploy and inventory check above. It must pass befo
 
 The local smoke path does not prove MVP. The VM run must deploy a real app image by immutable digest and verify the public route.
 
-Set these variables on the VM:
+Prepare a project, service, and production environment with the dashboard or
+`midnight project create`, `midnight service create`, and
+`midnight environment list`. Record their exact IDs. `real-app` deploys into
+that existing scope; it no longer resolves a service by a slug shared across
+projects or submits installation-wide config on a human's behalf.
+
+Create the service's managed public domain before this check. A human session
+uses `midnight link` followed by `midnight domain add`, or the service
+Networking panel. The server owns the generated hostname, root path, port,
+and HTTP intent. Set `MVP_PUBLIC_HOST` to that returned hostname. An explicitly
+selected recovery credential may instead use an existing generated domain or
+an ownership-verified custom domain; see the
+[custom-domain runbook](runbooks/custom-domain-cutover.md). The runner selects
+that persisted route and its saved TLS intent rather than inventing a route
+name, group, hostname, or TLS policy.
+
+Configure public DNS, ingress, and HTTPS before running. Edge-terminated HTTPS
+is valid public probe evidence while Midnight's own route remains HTTP; this
+does not establish that Midnight issued the edge certificate.
 
 ```sh
-export MVP_PROJECT_SLUG="mvp-acceptance"
-export MVP_SERVICE_SLUG="web"
-export MVP_IMAGE="registry.example/web@sha256:<digest>"
-export MVP_PUBLIC_HOST="mvp.example.test"
+export MIDNIGHT_API_TOKEN="midn_user_..."  # current durable human session
+export MVP_PROJECT_ID="prj_..."
+export MVP_SERVICE_ID="svc_..."
+export MVP_ENVIRONMENT_ID="env_..."
+export MVP_IMAGE="registry.example/web@sha256:<64-hex-digest>"
+export MVP_PUBLIC_HOST="<returned-managed-hostname>"
 export MVP_PUBLIC_PATH="/"
+export MVP_EXPECTED_RESPONSE="a literal marker identifying your application"
+
+bash scripts/mvp-acceptance.sh real-app
 ```
 
-Create the project/service and submit a deploy request:
+The runner validates project/service/environment lineage and finds exactly
+one existing public domain for the requested scope, hostname, and path before
+submitting a mutation. Its deploy body includes `environment_id`. Human
+sessions send only the admitted public opt-in; recovery requests select the
+saved route, use a host selector only for a custom hostname, and preserve its
+TLS policy.
 
-```sh
-cat >"$MVP_EVIDENCE_DIR/midnight-app.json" <<EOF
-{
-  "api_version": "midnight/v1alpha",
-  "projects": [{"slug": "${MVP_PROJECT_SLUG}", "display_name": "MVP Acceptance"}],
-  "services": [{"project_slug": "${MVP_PROJECT_SLUG}", "slug": "${MVP_SERVICE_SLUG}", "display_name": "MVP Web"}]
-}
-EOF
+It polls `GET /operations/{id}` for an exact terminal state, with bounded HTTP
+requests and a configurable positive `MVP_APP_POLL_ATTEMPTS` budget (default
+90, with two seconds between attempts). `FAILED`, cancellation, unknown
+states, and exhaustion fail. An old event containing the word `SUCCEEDED`
+cannot pass an operation whose current state is still running or failed.
 
-midnight config apply \
-  --file "$MVP_EVIDENCE_DIR/midnight-app.json" \
-  --endpoint "$MIDNIGHT_API_BASE" \
-  --idempotency-key "mvp-config-${MVP_RUN_ID}" \
-  | tee "$MVP_EVIDENCE_DIR/config-apply.json"
+A pass additionally requires the exact service/environment's canonical
+`latest-active` deployment to match the submitted operation and immutable
+image, the same managed domain to report `ready` and reachable, and public
+HTTPS to return the expected literal application marker. Certificate metadata
+is recorded separately, without private keys. Evidence files include
+`deploy-request.json`, `operation-status.json`, `active-deployment.json`,
+`domain-before.json`, `domain-after.json`, `public-response.body`, and
+`public-certificate.txt`.
 
-curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/services" | tee "$MVP_EVIDENCE_DIR/services.json"
-export MVP_SERVICE_ID="$(jq -r --arg slug "$MVP_SERVICE_SLUG" '(.data // .)[] | select(.slug == $slug) | .id' "$MVP_EVIDENCE_DIR/services.json")"
-
-cat >"$MVP_EVIDENCE_DIR/deploy-request.json" <<EOF
-{
-  "image": "${MVP_IMAGE}",
-  "route": {
-    "name": "${MVP_SERVICE_SLUG}",
-    "group": "mvp",
-    "host": "${MVP_PUBLIC_HOST}",
-    "path": "${MVP_PUBLIC_PATH}",
-    "public": true,
-    "tls": true
-  }
-}
-EOF
-
-curl -fsS -D "$MVP_EVIDENCE_DIR/deploy-response.headers" \
-  -H "Content-Type: application/json" \
-  -H "Idempotency-Key: mvp-deploy-${MVP_RUN_ID}" \
-  --data @"$MVP_EVIDENCE_DIR/deploy-request.json" \
-  "$MIDNIGHT_API_BASE/api/v1alpha/services/$MVP_SERVICE_ID/deployments" \
-  | tee "$MVP_EVIDENCE_DIR/deploy-response.json"
-```
-
-Acceptance assertion:
-
-```sh
-jq -e '.kind == "deploy" and (.state == "QUEUED" or .state == "RUNNING" or .state == "SUCCEEDED")' "$MVP_EVIDENCE_DIR/deploy-response.json"
-export MVP_OPERATION_ID="$(jq -r '.id // .operation.id' "$MVP_EVIDENCE_DIR/deploy-response.json")"
-```
-
-Watch operation events until success:
-
-```sh
-for i in $(seq 1 90); do
-  curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/operations/$MVP_OPERATION_ID/events" \
-    | tee "$MVP_EVIDENCE_DIR/operation-events-${i}.sse"
-  if grep -Eq "SUCCEEDED|succeeded" "$MVP_EVIDENCE_DIR/operation-events-${i}.sse"; then
-    break
-  fi
-  if grep -Eq "FAILED|failed|error" "$MVP_EVIDENCE_DIR/operation-events-${i}.sse"; then
-    exit 1
-  fi
-  sleep 2
-done
-```
-
-Verify runtime, route, and HTTPS:
-
-```sh
-curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/dashboard/runtime-inventory" \
-  | tee "$MVP_EVIDENCE_DIR/runtime-inventory.json"
-jq -e '.services[] | select(.id == env.MVP_SERVICE_ID and (.health == "healthy" or .health == "ready"))' "$MVP_EVIDENCE_DIR/runtime-inventory.json"
-jq -e '.routes[] | select(.service_id == env.MVP_SERVICE_ID or .service == env.MVP_SERVICE_ID or .host == env.MVP_PUBLIC_HOST)' "$MVP_EVIDENCE_DIR/runtime-inventory.json"
-
-curl -fsS -D "$MVP_EVIDENCE_DIR/public-response.headers" \
-  "https://${MVP_PUBLIC_HOST}${MVP_PUBLIC_PATH}" \
-  -o "$MVP_EVIDENCE_DIR/public-response.body"
-openssl s_client -servername "$MVP_PUBLIC_HOST" -connect "${MVP_PUBLIC_HOST}:443" </dev/null 2>/dev/null \
-  | openssl x509 -noout -subject -issuer -dates \
-  | tee "$MVP_EVIDENCE_DIR/public-certificate.txt"
-```
-
-Expected result: service health is live, route inventory is live, HTTPS returns the candidate app response, and certificate metadata is present without private key material.
+This mode proves the candidate deployment and public response at that time.
+It does not restart the server or roll back; perform and retain those separate
+fresh-host acceptance checks before declaring MVP complete.
 
 ## Operations And Failure-State Checks
 
 At least one failed deploy, one host degradation, and one backup/restore failure must produce typed reason codes.
 
-Use the operation failure endpoint to prove typed failure shape while the full worker path is still being hardened:
+Create a separate failed deployment on the disposable acceptance service, for
+example with an admitted test image whose configured health endpoint never
+becomes ready. Record that failed operation's ID and inspect its actual state:
 
 ```sh
-curl -fsS \
-  -H "Content-Type: application/json" \
-  --data '{"code":"MVP_ACCEPTANCE_SYNTHETIC_FAILURE","message":"acceptance typed failure check"}' \
-  "$MIDNIGHT_API_BASE/api/v1alpha/operations/$MVP_OPERATION_ID/fail" \
-  | tee "$MVP_EVIDENCE_DIR/operation-fail.json"
-jq -e '.state == "FAILED" and .code == "MVP_ACCEPTANCE_SYNTHETIC_FAILURE"' "$MVP_EVIDENCE_DIR/operation-fail.json"
+export MVP_FAILED_OPERATION_ID="op_..."
+curl -fsS -H "Authorization: Bearer $MIDNIGHT_API_TOKEN" \
+  "$MIDNIGHT_API_BASE/api/v1alpha/operations/$MVP_FAILED_OPERATION_ID" \
+  | tee "$MVP_EVIDENCE_DIR/operation-failure.json"
+jq -e '.state == "FAILED" and (.code | type == "string" and length > 0)' \
+  "$MVP_EVIDENCE_DIR/operation-failure.json"
 ```
 
-For final MVP acceptance, replace the synthetic failure with a real failed deploy, a real agent/Docker degradation, and a real backup/restore failure, then assert the concrete product reason codes in the same way.
+Retain the concrete failure reason and evidence of the initiating fault. Do
+the same for real agent/Docker degradation and a real backup/restore failure
+in the disposable environment. A manual `/operations/{id}/fail` call tests
+error presentation only and does not prove worker failure handling; never
+apply that synthetic transition to the successful public-app candidate.
 
 ## Audit And Safety Checks
 

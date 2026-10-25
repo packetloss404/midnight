@@ -44,22 +44,20 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 	}
 	dockerfile := filepath.Join(contextDir, "Dockerfile")
 	body := strings.Join([]string{
-		"# syntax=docker/dockerfile:1",
-		"FROM gcr.io/distroless/static-debian12@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		"FROM scratch",
 		"COPY hello /hello",
-		"CMD [\"/hello\"]",
 	}, "\n") + "\n"
 	if err := os.WriteFile(dockerfile, []byte(body), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	hello := filepath.Join(contextDir, "hello")
-	if err := os.WriteFile(hello, []byte("#!/bin/sh\necho midnight\n"), 0o755); err != nil {
+	if err := os.WriteFile(hello, []byte("midnight-build-integration\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	runner := BuildctlRunner{BuildctlPath: binary, Now: func() time.Time { return time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC) }}
 	if _, err := runner.VerifyVersion(context.Background()); err != nil {
-		t.Skipf("buildctl version check failed (got %v); skipping live solve", err)
+		t.Fatalf("configured buildctl version check: %v", err)
 	}
 
 	out1 := filepath.Join(tmp, "out1")
@@ -87,9 +85,20 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 	if res1.Digest != res2.Digest {
 		t.Fatalf("digests differ across runs: %s vs %s", res1.Digest, res2.Digest)
 	}
-	provenance1, _ := os.ReadFile(res1.ProvenancePath)
-	provenance2, _ := os.ReadFile(res2.ProvenancePath)
-	if string(provenance1) != string(provenance2) {
-		t.Fatalf("provenance differs across runs")
+	for name, paths := range map[string][2]string{
+		"provenance": {res1.ProvenancePath, res2.ProvenancePath},
+		"SBOM":       {res1.SBOMPath, res2.SBOMPath},
+	} {
+		first, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatalf("read first %s: %v", name, err)
+		}
+		second, err := os.ReadFile(paths[1])
+		if err != nil {
+			t.Fatalf("read second %s: %v", name, err)
+		}
+		if len(first) == 0 || string(first) != string(second) {
+			t.Fatalf("%s is empty or differs across runs", name)
+		}
 	}
 }
