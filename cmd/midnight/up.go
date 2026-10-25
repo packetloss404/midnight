@@ -1010,6 +1010,12 @@ func streamOperationEventsOnce(
 	req.Header.Set("Accept", "text/event-stream")
 	res, err := executeCLIStream(authHTTPClient, req)
 	if err != nil {
+		// The follow window can expire while reconnecting or waiting for
+		// response headers, before a scanner exists. Confirm the operation
+		// over REST just as we do when the deadline interrupts its body.
+		if ctx.Err() != nil {
+			return operationStreamResult{lastSequence: after, reason: "follow window elapsed"}
+		}
 		fmt.Fprintf(stderr, "%s: %s\n", command, err)
 		return failed(1)
 	}

@@ -31,6 +31,10 @@ export default defineConfig({
         target: apiProxyTarget,
         changeOrigin: true,
       },
+      '/graphql': {
+        target: apiProxyTarget,
+        changeOrigin: true,
+      },
     },
   },
   test: {

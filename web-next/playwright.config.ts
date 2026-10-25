@@ -34,10 +34,18 @@ export default defineConfig({
   ],
   webServer: externalBaseURL
     ? undefined
-    : {
+    : [{
+        command: "go run ./cmd/midnight-server serve --storage=memory --listen 127.0.0.1:4180",
+        cwd: "..",
+        url: "http://127.0.0.1:4180/api/v1alpha/compat",
+        env: { MIDNIGHT_API_BEARER_TOKEN: "" },
+        reuseExistingServer: false,
+        timeout: 300_000,
+      }, {
         command: "npm run dev -- --host 127.0.0.1 --port 4173 --strictPort",
         url: baseURL,
-        reuseExistingServer: !process.env.CI,
+        env: { MIDNIGHT_API_PROXY_TARGET: "http://127.0.0.1:4180" },
+        reuseExistingServer: false,
         timeout: 120_000,
-      },
+      }],
 });

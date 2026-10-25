@@ -8,6 +8,23 @@ correspond to individual public commits. See [Public Git History](README.md#publ
 
 ## Unreleased
 
+### Fixed (2026-10-25, feature verification)
+
+- Added default browser journeys against a real local Go API for project and
+  service creation, canonical image-deploy intake, responsive inspection,
+  documentation, and unavailable usage. Added the missing Vite GraphQL proxy;
+  queued intake remains explicitly separate from running-workload proof.
+- Kept `midnight up` follow timeouts resumable when SSE connection setup hits
+  its deadline, using REST status before reporting a deployment failure.
+- Corrected the MVP runner's obsolete dashboard directory and replaced the
+  legacy template queue assertion with canonical PostgreSQL provisioning,
+  connectivity, replacement-persistence, and cleanup checks. Added runner
+  regression coverage for failed, incomplete, timed-out, and unsafe replies.
+- Added a Docker/PostgreSQL CI gate that requires real durable canaries and
+  records skipped tests. Published a feature verification ledger, corrected
+  the pinned Go version, and clarified that backup metadata/restore plans and
+  synthetic surface inputs do not satisfy runtime or recovery acceptance.
+
 ### Fixed (2026-10-24, public dependency scan)
 
 - Updated Vitest and its development-only packages to 4.1.12 to address two

@@ -24,11 +24,11 @@ Modes:
   local-smoke         Start memory-mode server and run dashboard/API checks.
   surface-agreement   Check API/CLI/dashboard surface agreement locally.
   memory-blockers     Record owned outside-scope memory-mode diagnostics.
-  package-template    Check package/Postgres template deploy queue wiring.
+  package-template    Prove PostgreSQL provisioning, connectivity, and persistence.
   human-domain        Converge and prove one human-session generated HTTP domain.
   real-app            Check real app deploy, runtime inventory, route, and HTTPS.
   audit               Check audit API/evidence and optional JSONL verification.
-  backup              Check backup/restore APIs.
+  backup              Check experimental backup manifest/restore-plan APIs only.
   local               Run local-smoke and surface-agreement.
   help                Show this help.
 
@@ -40,6 +40,12 @@ MIDNIGHT_ACCEPTANCE_EXTERNAL_SERVER=1 is set.
 human-domain additionally requires MIDNIGHT_HUMAN_SESSION_TOKEN,
 MVP_PROJECT_ID, MVP_SERVICE_ID, MVP_ENVIRONMENT_ID, and MVP_INGRESS_URL. It
 converges the singleton generated domain but never deletes it.
+
+package-template uses MVP_PROJECT_ID when supplied; otherwise it creates a
+project in MVP_WORKSPACE_ID (default wrk_default). It requires the durable
+Postgres API and Docker worker. MVP_TEMPLATE_POLL_ATTEMPTS defaults to 120.
+backup requires an experimental API and a destination; it does not copy or
+restore application data and cannot satisfy the recovery acceptance gate.
 USAGE
 }
 
@@ -193,8 +199,10 @@ local_gate() {
   run_step make test
   run_step "$GO_BIN" test ./tools/contract-tests
   run_step "$GO_BIN" run ./tools/contract-tests
-  run_step "$NPM_BIN" --prefix web test
-  run_step "$NPM_BIN" --prefix web run build
+  run_step "$NPM_BIN" --prefix web-next ci
+  run_step "$NPM_BIN" --prefix web-next run typecheck
+  run_step "$NPM_BIN" --prefix web-next test
+  run_step "$NPM_BIN" --prefix web-next run build
   run_step make release-check
 }
 
@@ -241,12 +249,13 @@ memory_template_queue_probe() {
   status="$(
     api_curl -sS -o "$(tool_path "$CURL_BIN" "$MVP_EVIDENCE_DIR/template-deploy-memory.json")" -w "%{http_code}" \
       -H "Content-Type: application/json" \
-      --data '{"template_id":"postgres-16","service_name":"Postgres 16 MVP","database_name":"mvp"}' \
-      "$MIDNIGHT_API_BASE/api/v1alpha/dashboard/template-deploy"
+      -H "Idempotency-Key: memory-template-${MVP_RUN_ID}" \
+      --data '{"project_id":"prj_memory_probe","name":"Postgres 16 MVP"}' \
+      "$MIDNIGHT_API_BASE/api/v1alpha/templates/postgres/instances"
   )"
   printf "%s" "$status" >"$MVP_EVIDENCE_DIR/template-deploy-memory.status"
-  test "$status" = "501"
-  jq -e '.error.code == "NOT_IMPLEMENTED" and (.error.message | test("queue is not wired"))' "$MVP_EVIDENCE_DIR/template-deploy-memory.json"
+  test "$status" = "503"
+  jq -e '.error.code == "CAPABILITY_UNAVAILABLE" and .error.details.capability == "one-click-template-deploy"' "$MVP_EVIDENCE_DIR/template-deploy-memory.json"
 }
 
 memory_blockers() {
@@ -527,64 +536,74 @@ human_domain() {
 package_template() {
   choose_curl
   choose_tool JQ_BIN jq jq.exe
+  local attempts="${MVP_TEMPLATE_POLL_ATTEMPTS:-120}"
+  if [[ ! "$attempts" =~ ^[1-9][0-9]*$ ]]; then
+    echo "package-template: MVP_TEMPLATE_POLL_ATTEMPTS must be a positive integer" >&2
+    return 64
+  fi
   mkdir -p "$MVP_EVIDENCE_DIR"
+  local project_id="${MVP_PROJECT_ID:-}" request status_url state
+  if [[ -z "$project_id" ]]; then
+    local suffix
+    suffix="$(printf '%s' "$MVP_RUN_ID" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9-' | cut -c1-32)"
+    request="$(jq -n --arg workspace "${MVP_WORKSPACE_ID:-wrk_default}" --arg slug "mvp-template-${suffix}" \
+      '{workspace_id:$workspace,slug:$slug,display_name:"MVP Template"}')"
+    api_curl -fsS -H "Content-Type: application/json" \
+      -H "Idempotency-Key: mvp-template-project-${MVP_RUN_ID}" \
+      --data "$request" "$MIDNIGHT_API_BASE/api/v1alpha/projects" |
+      tee "$MVP_EVIDENCE_DIR/template-project.json"
+    project_id="$(jq_text -e '.id | select(type == "string" and length > 0)' "$MVP_EVIDENCE_DIR/template-project.json")"
+  fi
+  request="$(jq -n --arg project "$project_id" '{project_id:$project,name:"Postgres 16 MVP"}')"
   api_curl -fsS \
     -H "Content-Type: application/json" \
-    --data '{"template_id":"postgres-16","service_name":"Postgres 16 MVP","database_name":"mvp"}' \
-    "$MIDNIGHT_API_BASE/api/v1alpha/dashboard/template-deploy" |
+    -H "Idempotency-Key: mvp-template-${MVP_RUN_ID}" \
+    --data "$request" \
+    "$MIDNIGHT_API_BASE/api/v1alpha/templates/postgres/instances" |
     tee "$MVP_EVIDENCE_DIR/template-deploy.json"
 
   jq -e '
-    .schema_version == "midnight.dashboard.template-deploy.v1" and
-    .service.template_id == "postgres-16" and
-    .service.engine == "postgres" and
-    .service.runtime_state == "waiting-for-worker" and
-    .service.health == "queued" and
-    .service.queue == "deploy" and
-    (.service.job_id | length > 0) and
-    .plan.template_id == "postgres-16" and
-    .plan.engine == "postgres" and
-    .plan.volume.attach_required == true and
-    .plan.volume.status == "planned" and
-    .plan.backup.status == "needs-runtime" and
-    (.plan.backup.restore_command | length > 0) and
-    (.plan.required_secrets | index("database-password")) and
-    (.plan.runtime_env[] | select(.name == "DATABASE_PASSWORD" and .secret == true and .source == "generated-credential")) and
-    .plan.expose_tcp == false and
-    .operation.kind == "deploy" and
-    .operation.state == "QUEUED" and
-    .queue == "deploy" and
-    (.job_id | length > 0) and
-    .job_state == "QUEUED" and
-    .plan.durable == true and
-    .plan.connection_guidance.visibility == "private" and
-    .plan.connection_guidance.internal == "postgres://${SERVICE_HOST}:${SERVICE_PORT}/mvp?user=${DATABASE_USER}" and
-    (.plan.credential_refs | map(select(.name == "database-password" and .generated == true and .scope == "sealed")) | length) == 1 and
-    .plan.volume.attach_required == true and
-    .plan.volume.status == "planned" and
-    .plan.backup.status == "needs-runtime" and
-    .plan.restore_plan_guidance.status == "operator-plan-required" and
-    .plan.networking.private_by_default == true and
-    .plan.networking.external_tcp.status == "disabled" and
-    .plan.networking.external_tcp.source_allow_list_required == true and
-    .plan.expose_tcp == false
+    .template_slug == "postgres" and
+    (.state == "queued" or .state == "running" or .state == "succeeded") and
+    (.provision_run_id | type == "string" and length > 0) and
+    (.operation_id | type == "string" and length > 0) and
+    (.deployment_id | type == "string" and length > 0) and
+    (.created_services | length) == 1 and
+    (.created_volumes | length) == 1
   ' "$MVP_EVIDENCE_DIR/template-deploy.json"
-
-  local operation_id
-  operation_id="$(jq_text '.operation.id' "$MVP_EVIDENCE_DIR/template-deploy.json")"
-  api_curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/operations?kind=deploy&status=queued" |
-    tee "$MVP_EVIDENCE_DIR/deploy-operations.json"
-  jq -e --arg id "$operation_id" '.data[] | select(.id == $id)' "$MVP_EVIDENCE_DIR/deploy-operations.json"
-  api_curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/operations/$operation_id/events" |
-    tee "$MVP_EVIDENCE_DIR/template-operation-events.sse"
-  grep -q "template_id=postgres-16" "$MVP_EVIDENCE_DIR/template-operation-events.sse"
-  api_curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/dashboard/runtime-inventory" |
-    tee "$MVP_EVIDENCE_DIR/runtime-inventory-after-template.json"
-  jq -e '.services[] | select(.template_id == "postgres-16" and .runtime_state == "waiting-for-worker" and .queue == "deploy" and (.job_id | length > 0) and .connection.visibility == "private" and .volume.attach_required == true and .backup.status == "needs-runtime" and .restore_plan_guidance.status == "operator-plan-required" and .networking.private_by_default == true)' "$MVP_EVIDENCE_DIR/runtime-inventory-after-template.json"
-  if grep -E 'postgres://[^[:space:]]+:[^*@[:space:]]+@|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|MIDNIGHT_.*SECRET=' "$MVP_EVIDENCE_DIR/template-deploy.json" "$MVP_EVIDENCE_DIR/runtime-inventory-after-template.json"; then
+  status_url="$(jq_text -e '.status_url | select(type == "string")' "$MVP_EVIDENCE_DIR/template-deploy.json")"
+  # Follow only the canonical local status route; never forward an operator
+  # bearer to an arbitrary Location supplied by a mismatched server.
+  if [[ ! "$status_url" =~ ^/api/v1alpha/templates/postgres/instances/[a-zA-Z0-9_-]+$ ]]; then
+    echo "package-template: invalid provision status URL" >&2
+    return 1
+  fi
+  for ((attempt=1; attempt<=attempts; attempt++)); do
+    api_curl -fsS "$MIDNIGHT_API_BASE$status_url" |
+      tee "$MVP_EVIDENCE_DIR/template-status.json"
+    state="$(jq_text -e '.state | select(type == "string")' "$MVP_EVIDENCE_DIR/template-status.json")"
+    case "$state" in
+      succeeded) break ;;
+      failed)
+        echo "package-template: provisioning failed; inspect template-status.json" >&2
+        return 1
+        ;;
+      queued|running) ;;
+      *) echo "package-template: unknown provision state: $state" >&2; return 1 ;;
+    esac
+    if ((attempt < attempts)); then sleep 1; fi
+  done
+  jq -e '
+    .state == "succeeded" and
+    .connectivity_verified == true and
+    .persistence_verified == true and
+    .cleanup_completed == true
+  ' "$MVP_EVIDENCE_DIR/template-status.json"
+  if grep -E 'postgres://[^[:space:]]+:[^*@[:space:]]+@|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|MIDNIGHT_.*SECRET=' "$MVP_EVIDENCE_DIR/template-deploy.json" "$MVP_EVIDENCE_DIR/template-status.json"; then
     echo "secret-like material found in template evidence" >&2
     return 1
   fi
+  echo "package-template: PASS (connectivity, replacement persistence, and probe cleanup)"
 }
 
 real_app() {
@@ -693,6 +712,7 @@ backup_check() {
   choose_curl
   choose_tool JQ_BIN jq jq.exe
   mkdir -p "$MVP_EVIDENCE_DIR"
+  echo "backup: metadata/restore-plan diagnostic only; no application bytes are copied or restored" >&2
   api_curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/backup/restore/status" |
     tee "$MVP_EVIDENCE_DIR/restore-status.json"
   jq -e '.status == "available" or .status == "unavailable"' "$MVP_EVIDENCE_DIR/restore-status.json"

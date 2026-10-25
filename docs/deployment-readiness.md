@@ -4,16 +4,19 @@ Reconciled: 2026-09-25 against repository commit `4e802df`, installed commit
 `8ad2845`, and live package, domain, application, DNS, and edge observations.
 
 Status: fresh installation, source deployment, and public HTTPS are recorded
-across the dated evidence below. The current host runs commit `8ad2845`, schema
-72, and six active units. Its console and DocVault custom hostname respond over
-valid external HTTPS through an operator-managed Caddy edge. Cloudflare is now
-authoritative for the operator-owned domain; wildcard generated-app DNS and edge HTTPS
-survived a Caddy/portal restart on September 25. Application restart/rollback,
+across the dated evidence below. The September 24 observation recorded commit
+`8ad2845`, schema 72, six active units, and valid console/application HTTPS
+through an operator-managed Caddy edge. The September 25 observation recorded
+Cloudflare authority plus generated-app wildcard DNS and edge HTTPS surviving
+a Caddy/portal restart. These are historical observations, not an assertion
+about today's installed commit or health. Application restart/rollback,
 GitHub, and complete recovery acceptance remain open.
 
 The executable contract is [MVP acceptance](mvp-acceptance.md); the operator
 procedure is [live deploy proof](runtime/live-deploy-proof.md). Passing code
 checks does not establish the installed artifact or its current health.
+The [feature verification ledger](feature-verification.md) records the scope
+of the October 25 source/browser audit and the remaining external gates.
 
 ## Evidence ledger
 

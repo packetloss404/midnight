@@ -25,6 +25,32 @@ jobs:
           go-version: '1.26.9'
       - run: go test ./... -race -count=1
 
+  integration:
+    name: Docker and Postgres integration
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    services:
+      identity-postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: midnight
+          POSTGRES_PASSWORD: integration
+          POSTGRES_DB: midnight_identity
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U midnight -d midnight_identity"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    env:
+      MIDNIGHT_IDENTITY_TEST_DSN: postgres://midnight:integration@127.0.0.1:5432/midnight_identity?sslmode=disable
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.9'
+      - name: Run durable integration journeys
+        run: bash scripts/ci/integration-gate.sh
+
   web-next:
     name: web-next test
     runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}

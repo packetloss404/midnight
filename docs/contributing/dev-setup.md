@@ -2,7 +2,7 @@
 
 Required tools for Phase 0 scaffold work:
 
-- Go 1.25 or newer (`go.mod` pins the exact toolchain)
+- Go 1.26.9 (`go.mod` pins the exact patch toolchain)
 - Node.js 20 or newer
 - npm 10 or newer
 - Optional: Task

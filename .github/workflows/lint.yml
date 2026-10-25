@@ -31,10 +31,14 @@ jobs:
         run: go run ./tools/lint
       - name: Shell scripts
         run: |
-          bash -n scripts/*.sh scripts/dev/*.sh packaging/release/*.sh .github/scripts/*.sh \
+          bash -n scripts/*.sh scripts/ci/*.sh scripts/dev/*.sh packaging/release/*.sh .github/scripts/*.sh \
             deploy/debian/postinst deploy/debian/postrm deploy/debian/prerm
-          shellcheck -S warning scripts/*.sh scripts/dev/*.sh packaging/release/*.sh \
+          shellcheck -S warning scripts/*.sh scripts/ci/*.sh scripts/dev/*.sh packaging/release/*.sh \
             .github/scripts/*.sh deploy/debian/postinst deploy/debian/postrm deploy/debian/prerm
+      - name: Acceptance and local-gate runner contracts
+        run: |
+          bash scripts/mvp-acceptance_test.sh
+          bash scripts/ci/local-gate_test.sh
 
   workflow-lint:
     name: workflow-lint

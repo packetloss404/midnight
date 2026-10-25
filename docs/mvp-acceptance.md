@@ -3,7 +3,9 @@
 This document is the acceptance path for deciding whether Midnight is MVP-ready. It is intentionally command-first: every checkpoint either has an exact local command, an exact VM command, or an owned outside-scope diagnostic with rationale.
 
 The current implementation and dated installed evidence are summarized in
-[`deployment-readiness.md`](deployment-readiness.md), reconciled on 2026-09-12.
+[`deployment-readiness.md`](deployment-readiness.md). The
+[feature verification ledger](feature-verification.md) separates browser/API
+coverage from runtime and external-provider acceptance.
 The September 5 records prove fresh schema-71 installation and a real source
 deployment served through Traefik over HTTP. They do not complete the HTTPS,
 restart/rollback, audit, and recovery criteria below or attest to today's host.
@@ -109,8 +111,10 @@ make build
 make test
 go test ./tools/contract-tests
 go run ./tools/contract-tests
-npm --prefix web test
-npm --prefix web run build
+npm --prefix web-next ci
+npm --prefix web-next run typecheck
+npm --prefix web-next test
+npm --prefix web-next run build
 make release-check
 ```
 
@@ -152,7 +156,14 @@ Run the executable agreement check against a local memory server or an existing 
 bash scripts/mvp-acceptance.sh surface-agreement
 ```
 
-Expected result: all commands exit `0`. The runner creates one project and service, verifies the same IDs through API and CLI JSON output, registers an agent so host inventory is not synthetic, records an agent route observation so route rows are linked to the service, creates a backed operation for log-surface checks, verifies audit API/dashboard/export evidence, checks typed restore status, and runs the generated evidence assertions.
+Expected result: all commands exit `0`. The runner creates one project and
+service and verifies the same IDs through API and CLI JSON output. It submits
+a test agent registration and route observation, creates a `_demo` operation,
+and checks audit/export, restore-status, and generated evidence shapes. These
+are synthetic runtime inputs sent to a real API. This mode does not launch a
+node agent, container, or ingress, read real application logs, or use a browser;
+it proves API/CLI/projection agreement only. Browser workflows are a separate
+gate described in [feature verification](feature-verification.md).
 
 ## Human-Session Generated Domain Check
 
@@ -248,7 +259,7 @@ The runner writes `blockers.tsv` with `state`, `name`, `owner`, and `rationale`.
 
 | Diagnostic | Owner | Rationale |
 | --- | --- | --- |
-| Memory-mode template deploy has no queue store and returns `NOT_IMPLEMENTED`. | control-plane-api | Memory mode is diagnostic; MVP package mode must use the Postgres queue store and pass `package-template`. |
+| Canonical memory-mode template deploy has no durable provisioner and returns `503 CAPABILITY_UNAVAILABLE`. | control-plane-api | Memory mode is diagnostic; MVP package mode must use Postgres and the Docker worker and pass `package-template`. |
 | No generated route exists before runtime reports one. | runtime-agent | Local smoke does not run Docker or Traefik; `surface-agreement` records a route observation and `real-app` must prove HTTPS. |
 | No runtime host is registered before agent registration. | runtime-agent | Local smoke starts only the API; `surface-agreement` registers an agent and checks host inventory. |
 | Backup run API has no configured destination in unconfigured memory mode. | operator-config | `backup` requires a real configured destination; missing config must remain the typed degraded state `BACKUP_OFFHOST_MISSING`. |
@@ -509,7 +520,19 @@ fi
 
 ## Backup And Restore Acceptance
 
-MVP cannot pass until app/database and platform-data backup/restore are visible and backed by a configured destination. The current MVP-safe restore path creates deterministic restore plans; destructive restore execution remains an explicit later operator action. Required assertions:
+MVP cannot pass until app/database and platform-data backup/restore have been
+executed against a configured off-host destination, restored, and read back.
+Follow the [backup and restore runbook](runbooks/backup-restore.md) for real
+`midnight-recovery` and service-volume execution. Keep that evidence separate
+from the API metadata diagnostic below.
+
+`scripts/mvp-acceptance.sh backup` exercises only export manifests and restore
+plans. `POST /backup/runs` returns `501 NOT_IMPLEMENTED` normally; an API
+started with `MIDNIGHT_EXPERIMENTAL=1` can write a manifest containing the
+caller-supplied byte counts. Those counts do not cause a database dump,
+application archive, encryption, restore, or readback. A successful diagnostic
+does not satisfy the backup acceptance criterion. Run the following only on an
+explicitly experimental test instance with a configured destination:
 
 ```sh
 curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/backup/restore/status" | tee "$MVP_EVIDENCE_DIR/restore-status.json"
@@ -564,7 +587,10 @@ MVP is accepted only when all of these are true:
   container replacement for all four official database images; the installed
   package acceptance still uses PostgreSQL as its representative end-to-end
   database flow.
-- App/database and platform-data backup/restore drills pass or show typed degraded states such as `BACKUP_OFFHOST_MISSING`.
+- App/database and platform-data backup/restore drills copy real bytes to an
+  off-host destination, restore them, and pass application readback. A typed
+  degraded state such as `BACKUP_OFFHOST_MISSING` is a useful diagnostic and
+  leaves this criterion incomplete.
 - One failed deploy, one host degradation, and one backup/restore failure produce actionable reason codes.
 - `midnight audit verify` passes for the generated audit chain/export.
 - The primary dashboard contains no fake/demo-only data in the normal product path; any unavailable action is disabled or returns a real reason.

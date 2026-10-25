@@ -13,6 +13,7 @@ separately in `packetloss404/midnight-marketing`.
 | Choose unfinished work | [Backlog](../BACKLOG.md), the only ordered work queue |
 | Assess recorded deployment evidence | [Deployment readiness](deployment-readiness.md) |
 | Decide whether MVP acceptance passes | [Acceptance contract](mvp-acceptance.md) |
+| Check advertised feature coverage and missing proof | [Feature verification ledger](feature-verification.md) |
 | See changes over time | [Changelog](../CHANGELOG.md) |
 
 ## Build and operate
