@@ -6,6 +6,17 @@ Status: Midnight is in MVP acceptance. The repo has the control-plane, package, 
 
 MVP target: Midnight reaches MVP when a design partner can install it on a fresh single trusted VM, deploy and operate one real app with HTTPS, use the dashboard/CLI/API to understand deploys, services, routes, hosts, logs, audit evidence, backups, and recovery states, and pass the acceptance checklist in `docs/mvp-acceptance.md` without fake/demo-only data in the primary product path.
 
+## Public Git History
+
+This public repository began on October 23, 2026, with a reviewed snapshot of
+Midnight's source, tests, and documentation. Development before that date took
+place in a private repository. Its commits and pull requests were not imported
+because they included operator-specific deployment details. The current result
+of that work is tracked here; the dated [changelog](CHANGELOG.md), design
+decisions, and backlog provide the earlier project record. Maintainers retained
+the private history for internal provenance. New changes are recorded in this
+repository from the initial public commit onward.
+
 ## Quickstart
 
 Run the whole control plane on your laptop with Docker Compose, open the

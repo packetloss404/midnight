@@ -2,6 +2,10 @@
 
 All notable changes to Midnight are tracked here. The project has not cut a public release yet, so entries remain under `Unreleased` until the first tagged version.
 
+Entries before October 23, 2026, describe private development. The public Git
+history starts with a source snapshot on that date, so those entries do not
+correspond to individual public commits. See [Public Git History](README.md#public-git-history).
+
 ## Unreleased
 
 ### Fixed (2026-10-06, release-candidate checks)
