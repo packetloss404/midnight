@@ -143,7 +143,7 @@ func deleteServiceInTx(
 // stranding infrastructure. A deployment is "live" when it is still moving
 // (queued, building, deploying) or when it is the active deployment and its
 // runtime is still meant to be running. A stopped active deployment is not
-// live: the runtime action path already tore its containers down, and the row
+// live: the runtime action path already stopped its containers, and the row
 // only survives as the record of what ran last.
 func refuseServiceDeleteWhileRunning(ctx context.Context, tx *pg.Tx, serviceID string) error {
 	rows, err := tx.Query(ctx, `

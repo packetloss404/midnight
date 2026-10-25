@@ -36,7 +36,7 @@ The delete is refused with `SERVICE_DELETE_RUNNING` (409) when the service has
   restart, or remove is mid-flight.
 
 An `active` deployment whose `runtime_desired_state` is `stopped` is **not**
-running. The runtime action path already tore its containers down; the row
+running. The runtime action path already stopped its containers; the row
 survives only as the record of what ran last, and the service can be deleted.
 This is why "stop, then delete" terminates: `active` can only ever transition to
 `superseded`, so waiting for the deployment to leave `active` would make a

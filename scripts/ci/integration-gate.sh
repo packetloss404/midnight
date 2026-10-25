@@ -56,6 +56,10 @@ required_tests=(
   'github.com/midnight/midnight/cmd/midnight-buildkit TestTenantSourceUpHTTPOutboxWorkerMaterializationAndRelease'
   'github.com/midnight/midnight/internal/volume TestManagerPersistsBytesAcrossRealDockerContainerReplacement'
   'github.com/midnight/midnight/internal/runtime/docker TestRunOneOffAgainstDockerSurvivesAdapterRestartWithoutRerun'
+  'github.com/midnight/midnight/internal/runtime/docker TestRuntimeActionRestartAgainstDockerRestoresHTTPAfterAddressChange'
+  'github.com/midnight/midnight/internal/db/pg TestActiveDeploymentRouteRefreshConvergesAddressesAndFencesPreparedPublication'
+  'github.com/midnight/midnight/internal/db/pg TestActiveDeploymentRouteRefreshConvergesAddressesAndFencesPreparedPublication/stop-remove-web'
+  'github.com/midnight/midnight/internal/db/pg TestActiveDeploymentRouteRefreshConvergesAddressesAndFencesPreparedPublication/stop-remove-other'
   'github.com/midnight/midnight/internal/backup TestS3DestinationAgainstMinIO'
   'github.com/midnight/midnight/internal/backup TestSealedCredentialEndToEndAgainstMinIO'
 )

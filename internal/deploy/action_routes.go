@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/midnight/midnight/internal/deploy/readiness"
 	"github.com/midnight/midnight/internal/router"
 )
 
@@ -18,6 +19,36 @@ type DurableActionRouteStore interface {
 type DurableActionRouteWithdrawer struct {
 	Store      DurableActionRouteStore
 	Reconciler *router.DurableRouteReconciler
+	Readiness  ReadinessConfig
+}
+
+func (w DurableActionRouteWithdrawer) RestoreDeployment(ctx context.Context, action RuntimeActionRecord) error {
+	store, ok := w.Store.(interface {
+		RefreshActiveDeploymentRoutes(context.Context, string, router.RouteScope) error
+	})
+	if !ok || w.Reconciler == nil {
+		return errors.New("durable action route refresh and reconciler are required")
+	}
+	scope := router.RouteScope{
+		ProjectID: action.ProjectID, EnvironmentID: action.EnvironmentID, ServiceID: action.ServiceID,
+	}
+	if err := store.RefreshActiveDeploymentRoutes(ctx, action.DeploymentID, scope); err != nil {
+		return err
+	}
+	states, err := w.Store.ListDeploymentPublicRouteStates(ctx, action.DeploymentID, scope)
+	if err != nil {
+		return err
+	}
+	if len(states) == 0 {
+		return nil
+	}
+	return readiness.Wait(ctx, readiness.ProbeFunc(func(ctx context.Context) error {
+		err := w.Reconciler.ReconcileGroup(ctx, action.ProjectID, action.EnvironmentID)
+		if err != nil && !errors.Is(err, router.ErrDurableRouteUnverified) && !errors.Is(err, router.ErrDurableRouteRevisionMoved) {
+			return readiness.Fatal(err)
+		}
+		return err
+	}), readiness.Options{Timeout: w.Readiness.Timeout, Interval: w.Readiness.Interval, Now: w.Readiness.Now, Sleep: w.Readiness.Sleep})
 }
 
 func (w DurableActionRouteWithdrawer) WithdrawDeployment(ctx context.Context, action RuntimeActionRecord) error {
@@ -74,9 +105,17 @@ func (w DurableActionRouteWithdrawer) WithdrawDeployment(ctx context.Context, ac
 	); err != nil {
 		return err
 	}
-	return w.Reconciler.ReconcileGroup(
+	err = w.Reconciler.ReconcileGroup(
 		ctx,
 		action.ProjectID,
 		action.EnvironmentID,
 	)
+	var blocked *router.DurableRouteBlockedError
+	if errors.As(err, &blocked) && blocked.State == router.RouteApplyBlockedBackend {
+		// ReconcileGroup has published the empty backend set and persisted
+		// its revision. Withdrawing the last route intentionally produces
+		// blocked_backend; that is successful withdrawal, not publication failure.
+		return nil
+	}
+	return err
 }

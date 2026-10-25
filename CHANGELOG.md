@@ -24,6 +24,16 @@ correspond to individual public commits. See [Public Git History](README.md#publ
   routes in the durable intake transaction, preserving private defaults and
   the canonical publication fence. Added generated/custom eligibility,
   replay, and injected-failure rollback regression coverage.
+- Made restart actions wait for configured application readiness, record
+  current runtime addresses, and republish managed routes before reporting
+  success. Scoped route refresh and startup canonical repair preserve a
+  prepared successor's publication. Added restart/address and promotion-fence
+  regression checks; installed acceptance remains separate.
+- Aligned worker removal with the API's stop-then-remove contract: a running
+  active deployment remains protected, while a stopped one can be removed.
+  Completion retires the target and clears only its own active pointer,
+  preserving a successor promoted concurrently. Stop records stopped intent
+  so startup route repair cannot restore traffic for a stopped workload.
 - Kept human administrators on tenant changeset and variable authority, refreshed
   tenant metadata after apply, restored the Changes advanced menu, and added
   required runtime-write preconditions and stale-write reload recovery.

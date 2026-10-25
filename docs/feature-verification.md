@@ -63,6 +63,27 @@ commit-bound evidence.
   transition tests cover authorization and state behavior. Real image pull,
   healthy promotion, restart, stop/remove, rollback, and public traffic still
   require the worker and installed `real-app`/recovery drills.
+  Restart regression coverage specifically targets Docker Stop/Start changing
+  a container address while a published backend still points at the old one.
+  `TestRuntimeActionRestartAgainstDockerRestoresHTTPAfterAddressChange` uses
+  a real Docker adapter and HTTP reverse proxy with action-store doubles;
+  success must follow application readiness, fresh observation, and restored
+  HTTP traffic. The separate PostgreSQL
+  `TestActiveDeploymentRouteRefreshConvergesAddressesAndFencesPreparedPublication`
+  checks service-scoped backend refresh, explicit canonical repair, and
+  protection of a prepared successor's route while the prior active pointer
+  remains.
+  Their current candidate's non-skipped results are required before treating
+  these regressions as passing evidence. They do not replace an installed
+  server/worker restart and rollback drill or public HTTPS verification.
+  Stop/remove regression coverage also follows the API's lifecycle boundary:
+  removing an active running deployment is refused; an active stopped one can
+  be removed. Completion supersedes that target, marks its runtime removed,
+  and conditionally clears only its own active pointer, preserving a newly
+  promoted successor. Stopped intent must remain durable across interrupted
+  stop/retry so startup repair cannot republish a stopped workload. These
+  lifecycle assertions still require their current candidate's executed
+  regression and CI results.
 - **Embedded Claude and OpenAI-compatible agent.** `internal/agent/claude`,
   `openai`, `tools`, and API tests cover provider framing, tool-use loops,
   mutation gates, tenant authority, streams, and accounting with test

@@ -12,6 +12,7 @@ import (
 
 	"github.com/midnight/midnight/internal/failurecodes"
 	"github.com/midnight/midnight/internal/queue"
+	"github.com/midnight/midnight/internal/serviceconfig"
 	"github.com/midnight/midnight/pkg/orailtypes"
 )
 
@@ -55,6 +56,7 @@ type RuntimeActionRecord struct {
 	Step             string
 	DeploymentActive bool
 	DesiredState     string
+	Image            string
 }
 
 type RuntimeActionStore interface {
@@ -78,18 +80,24 @@ type RuntimeActionRouteWithdrawer interface {
 	WithdrawDeployment(context.Context, RuntimeActionRecord) error
 }
 
+type RuntimeActionRouteRestorer interface {
+	RestoreDeployment(context.Context, RuntimeActionRecord) error
+}
+
 type RuntimeActionInstanceStore interface {
 	SetDeploymentState(context.Context, string, string, string) error
 }
 
 type ActionExecutor struct {
-	Store      RuntimeActionStore
-	Runtime    RuntimeActionRuntime
-	Routes     RuntimeActionRouteWithdrawer
-	Instances  RuntimeActionInstanceStore
-	Operations OperationUpdater
-	Cancels    CancelChecker
-	StopGrace  time.Duration
+	Store         RuntimeActionStore
+	Runtime       RuntimeActionRuntime
+	Routes        RuntimeActionRouteWithdrawer
+	Instances     RuntimeActionInstanceStore
+	Operations    OperationUpdater
+	Cancels       CancelChecker
+	StopGrace     time.Duration
+	Configuration serviceconfig.Resolver
+	Readiness     ReadinessConfig
 }
 
 func IsDeploymentActionJob(payload []byte) bool {
@@ -145,7 +153,7 @@ func (e ActionExecutor) Execute(ctx context.Context, job queue.Job) (ExecutionOu
 	// The only cancellation safe point is after the lease is held and the
 	// durable action is marked running, but before the first external side
 	// effect. Once route/runtime mutation begins the action converges forward.
-	if e.Cancels != nil {
+	if e.Cancels != nil && record.Step == "" {
 		canceled, cancelErr := e.Cancels.CancelRequested(ctx, payload.OperationID)
 		if cancelErr != nil {
 			return e.fail(ctx, out, payload.ActionID, failurecodes.InternalError, cancelErr)
@@ -208,16 +216,28 @@ func (e ActionExecutor) Execute(ctx context.Context, job queue.Job) (ExecutionOu
 		if err := e.setInstanceState(ctx, record.DeploymentID, "running", "starting"); err != nil {
 			return e.fail(ctx, out, record.ID, failurecodes.InternalError, err)
 		}
+		if err := e.waitRestartReady(ctx, record); err != nil {
+			return e.fail(ctx, out, record.ID, failurecodes.ReconcileStepFailed, err)
+		}
 		if err := e.Store.RecordRuntimeActionStep(ctx, record.ID, "started"); err != nil {
 			return e.fail(ctx, out, record.ID, failurecodes.InternalError, err)
+		}
+		if e.Routes != nil {
+			restorer, ok := e.Routes.(RuntimeActionRouteRestorer)
+			if !ok {
+				return e.fail(ctx, out, record.ID, failurecodes.ReconcileStepFailed, errors.New("runtime action route restorer is required"))
+			}
+			if err := restorer.RestoreDeployment(ctx, record); err != nil {
+				return e.fail(ctx, out, record.ID, failurecodes.ReconcileStepFailed, err)
+			}
 		}
 		if err := e.Store.CompleteRuntimeAction(ctx, record.ID, "running"); err != nil {
 			return e.fail(ctx, out, record.ID, failurecodes.InternalError, err)
 		}
 	case RuntimeActionRemove:
-		if record.DeploymentActive {
+		if record.DeploymentActive && record.DesiredState != "stopped" {
 			return e.fail(ctx, out, record.ID, failurecodes.ResourceConflict,
-				errors.New("remove refuses an active deployment"))
+				errors.New("remove requires the active deployment to be stopped"))
 		}
 		record.InstanceID = ""
 		if err := e.withdraw(ctx, record); err != nil {
@@ -271,9 +291,8 @@ func (e ActionExecutor) forEachInstance(ctx context.Context, record RuntimeActio
 }
 
 func (e ActionExecutor) withdraw(ctx context.Context, record RuntimeActionRecord) error {
-	if record.Step == "route_withdrawn" || record.Step == "stopped" || record.Step == "removed" {
-		return nil
-	}
+	// Repeat this exact-deployment withdrawal after a lease/process restart:
+	// startup repair may have republished old derived state before this retry.
 	if e.Routes != nil {
 		if err := e.Routes.WithdrawDeployment(ctx, record); err != nil {
 			return fmt.Errorf("withdraw deployment routes: %w", err)
