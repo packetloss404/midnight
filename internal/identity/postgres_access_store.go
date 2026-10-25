@@ -289,7 +289,7 @@ func (s *PostgresStore) putWorkspaceMember(ctx context.Context, workspaceID, use
 		return WorkspaceMember{}, ErrMembershipVersionConflict
 	}
 	var result WorkspaceMember
-	err := s.Pool.WithTxOpts(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx *pg.Tx) error {
+	err := s.withMembershipTx(ctx, func(tx *pg.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "workspace-members:"+workspaceID); err != nil {
 			return err
 		}
@@ -377,7 +377,7 @@ func (s *PostgresStore) removeWorkspaceMember(ctx context.Context, workspaceID, 
 	if conditional && expectedVersion < 1 {
 		return ErrMembershipVersionConflict
 	}
-	return s.Pool.WithTxOpts(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx *pg.Tx) error {
+	return s.withMembershipTx(ctx, func(tx *pg.Tx) error {
 		if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "workspace-members:"+workspaceID); err != nil {
 			return err
 		}
@@ -465,7 +465,7 @@ func (s *PostgresStore) putProjectMember(ctx context.Context, projectID, userID 
 		return ProjectMember{}, ErrMembershipVersionConflict
 	}
 	var result ProjectMember
-	err := s.Pool.WithTxOpts(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx *pg.Tx) error {
+	err := s.withMembershipTx(ctx, func(tx *pg.Tx) error {
 		workspaceID, err := projectWorkspaceForMembershipMutation(ctx, tx, projectID)
 		if err != nil {
 			return err
@@ -559,7 +559,7 @@ func (s *PostgresStore) removeProjectMember(ctx context.Context, projectID, user
 	if conditional && expectedVersion < 1 {
 		return ErrMembershipVersionConflict
 	}
-	return s.Pool.WithTxOpts(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable}, func(tx *pg.Tx) error {
+	return s.withMembershipTx(ctx, func(tx *pg.Tx) error {
 		workspaceID, err := projectWorkspaceForMembershipMutation(ctx, tx, projectID)
 		if err != nil {
 			return err
@@ -606,6 +606,20 @@ func (s *PostgresStore) removeProjectMember(ctx context.Context, projectID, user
 		}
 		return nil
 	})
+}
+
+// An advisory lock acquired inside SERIALIZABLE can wait after PostgreSQL has
+// chosen its snapshot. Retry the whole transaction so the loser observes the
+// committed membership version and returns the normal CAS conflict.
+func (s *PostgresStore) withMembershipTx(ctx context.Context, fn func(*pg.Tx) error) error {
+	for attempt := 0; ; attempt++ {
+		err := s.Pool.WithTxOpts(ctx, pgx.TxOptions{IsoLevel: pgx.Serializable}, fn)
+		var postgresError *pgconn.PgError
+		if attempt >= 2 || ctx.Err() != nil || !errors.As(err, &postgresError) ||
+			(postgresError.Code != "40001" && postgresError.Code != "40P01") {
+			return err
+		}
+	}
 }
 
 func (s *PostgresStore) ResolveAccess(ctx context.Context, userID string, target AccessTarget) (AccessGrant, error) {

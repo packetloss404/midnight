@@ -168,10 +168,10 @@ func TestTenantEnvironmentUpdateAuthorizationReplayCASConflictAndRollback(t *tes
 			http.MethodPatch,
 			v1alphaPrefix+"/environments/"+environmentID,
 			body,
-			map[string]string{
+			integrationVersionHeaders(body, map[string]string{
 				"Authorization":   "Bearer " + token,
 				"Idempotency-Key": key,
-			},
+			}),
 		)
 		return tenantEnvironmentUpdateHTTPResponse{
 			Code:     response.Code,
@@ -416,7 +416,7 @@ func TestTenantEnvironmentUpdateAuthorizationReplayCASConflictAndRollback(t *tes
 		"env_update_cas",
 		casBody,
 	)
-	if casConflict.Code != http.StatusConflict ||
+	if casConflict.Code != http.StatusPreconditionFailed ||
 		!strings.Contains(casConflict.Body, `"conflict":"version"`) ||
 		casConflict.Replayed != "" ||
 		casReplay.Code != casConflict.Code ||
@@ -521,7 +521,7 @@ func TestTenantEnvironmentUpdateAuthorizationReplayCASConflictAndRollback(t *tes
 		switch response.Code {
 		case http.StatusOK:
 			distinctOK++
-		case http.StatusConflict:
+		case http.StatusPreconditionFailed:
 			distinctConflict++
 			if !strings.Contains(response.Body, `"conflict":"version"`) {
 				t.Fatalf("distinct conflict body=%s", response.Body)

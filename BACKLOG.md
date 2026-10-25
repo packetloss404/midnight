@@ -4,6 +4,12 @@ This is the single source of truth for unfinished Midnight product and release
 work. `docs/mvp-acceptance.md` remains the executable acceptance contract;
 dated delivery plans and handoff reports are design history, not live queues.
 
+The [October 25 feature verification ledger](docs/feature-verification.md)
+maps advertised claims to unit/contract, fixture browser, real local API
+browser, durable integration, and installed/external evidence. It does not
+close the operator gates below. In particular, an experimental backup
+manifest, a restore plan, or a queued deployment is not runtime/recovery proof.
+
 Last reconciled: 2026-09-24 against repository commit `8ad2845` and the live
 package, domain, and application observation recorded in
 `docs/research/installed-vps-verification-2026-09-24.md`.

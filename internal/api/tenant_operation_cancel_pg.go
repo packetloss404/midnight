@@ -547,7 +547,8 @@ func cancelCanonicalDeploymentAndOperationTx(
 		   SET state='canceled',
 		       completed_at=COALESCE(completed_at,$2),
 		       build_completed_at=CASE
-		         WHEN state='building' THEN COALESCE(build_completed_at,$2)
+		         WHEN state='building' AND build_started_at IS NOT NULL
+		           THEN COALESCE(build_completed_at,$2)
 		         ELSE build_completed_at
 		       END,
 		       updated_at=$2,

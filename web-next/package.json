@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
+    "test:e2e:postgres": "playwright test --config playwright.postgres.config.ts",
     "test:e2e:ui": "playwright test --ui",
     "test:e2e:install": "playwright install chromium",
     "capture:product-tour": "node scripts/capture-product-tour.mjs",
@@ -33,6 +34,9 @@
     "clsx": "^2.1.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
+  },
+  "overrides": {
+    "postcss-selector-parser": "7.1.6"
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.12.1",

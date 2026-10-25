@@ -2,7 +2,7 @@ RELEASE_EVIDENCE_DIR ?= artifacts/phase0
 RELEASE_EVIDENCE_JSON ?= $(RELEASE_EVIDENCE_DIR)/release-evidence.json
 RELEASE_EVIDENCE_INDEX_JSON ?= $(RELEASE_EVIDENCE_DIR)/release-evidence-index.json
 RELEASE_SUMMARY_JSON ?= $(RELEASE_EVIDENCE_DIR)/release-summary.json
-MIDNIGHT_GO_TOOLCHAIN ?= go1.26.9
+MIDNIGHT_GO_TOOLCHAIN ?= go1.26.10
 
 .PHONY: bootstrap build test format lint supplychain audit phase0-gate phase0-drills release-check ci-local ci-local-test clean-artifacts generate generate-midnightctl generate-midnightctl-check api-contract-check api-v1-graduation-report api-v1-graduation-check adr-index db-integration package-deb-provenance-test package-deb package-deb-sign
 

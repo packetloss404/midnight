@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
       - name: Check gofmt
         run: test -z "$(gofmt -l cmd internal pkg tools)"
       - name: go vet
@@ -31,10 +31,15 @@ jobs:
         run: go run ./tools/lint
       - name: Shell scripts
         run: |
-          bash -n scripts/*.sh scripts/dev/*.sh packaging/release/*.sh .github/scripts/*.sh \
+          bash -n scripts/*.sh scripts/ci/*.sh scripts/dev/*.sh packaging/release/*.sh .github/scripts/*.sh \
             deploy/debian/postinst deploy/debian/postrm deploy/debian/prerm
-          shellcheck -S warning scripts/*.sh scripts/dev/*.sh packaging/release/*.sh \
+          shellcheck -S warning scripts/*.sh scripts/ci/*.sh scripts/dev/*.sh packaging/release/*.sh \
             .github/scripts/*.sh deploy/debian/postinst deploy/debian/postrm deploy/debian/prerm
+      - name: Acceptance and local-gate runner contracts
+        run: |
+          bash scripts/mvp-acceptance_test.sh
+          bash scripts/ci/local-gate_test.sh
+          bash scripts/ci/integration-test-exec_test.sh
 
   workflow-lint:
     name: workflow-lint
@@ -43,7 +48,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
       - name: actionlint
         run: |
           set -euo pipefail

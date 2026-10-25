@@ -554,7 +554,7 @@ func (s *PostgresDeploymentActionStore) BeginRuntimeAction(ctx context.Context, 
 		var action, state string
 		err := tx.QueryRow(ctx, `
 			SELECT a.id,a.operation_id,a.deployment_id,d.project_id,d.service_id,d.environment_id,
-			       a.action,a.state,a.step,d.active,d.runtime_desired_state
+			       a.action,a.state,a.step,d.active,d.runtime_desired_state,d.image_ref
 			  FROM deployment_runtime_actions a
 			  JOIN deployments d ON d.id=a.deployment_id
 			 WHERE a.id=$1 AND a.operation_id=$2
@@ -563,7 +563,7 @@ func (s *PostgresDeploymentActionStore) BeginRuntimeAction(ctx context.Context, 
 		).Scan(
 			&out.ID, &out.OperationID, &out.DeploymentID, &out.ProjectID, &out.ServiceID,
 			&out.EnvironmentID, &action, &state, &out.Step, &out.DeploymentActive,
-			&out.DesiredState,
+			&out.DesiredState, &out.Image,
 		)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrDeploymentNotFound
@@ -595,6 +595,42 @@ func (s *PostgresDeploymentActionStore) RecordRuntimeActionStep(ctx context.Cont
 	if err := s.ready(); err != nil {
 		return err
 	}
+	if step == "started" || step == "route_withdrawn" || step == "stopped" {
+		return s.Pool.WithTx(ctx, func(tx *pg.Tx) error {
+			var deploymentID, action string
+			if err := tx.QueryRow(ctx, `
+				UPDATE deployment_runtime_actions SET step=$2,updated_at=$3,resource_version=resource_version+1
+				WHERE id=$1 AND state='running' AND ($2<>'started' OR action='restart') RETURNING deployment_id,action`,
+				actionID, step, s.now(time.Time{})).Scan(&deploymentID, &action); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return ErrDeploymentActionConflict
+				}
+				return err
+			}
+			if step != "started" {
+				if action != "stop" && !(action == "restart" && step == "stopped") {
+					return nil
+				}
+				// Startup route repair must not resurrect a withdrawn stop after
+				// a crash, or publish a restart still waiting for app readiness.
+				_, err := tx.Exec(ctx, `UPDATE deployments SET runtime_desired_state='stopped',updated_at=$2,
+					resource_version=resource_version+1 WHERE id=$1`, deploymentID, s.now(time.Time{}))
+				return err
+			}
+			// "started" is recorded only after application readiness succeeds.
+			// Until then startup repair must see durable stopped intent. Route
+			// publication and observed success still remain to be verified.
+			tag, err := tx.Exec(ctx, `UPDATE deployments SET runtime_desired_state='running',runtime_observed_state='unknown',
+				updated_at=$2,resource_version=resource_version+1 WHERE id=$1 AND active=TRUE AND state='active' AND runtime_desired_state<>'removed'`, deploymentID, s.now(time.Time{}))
+			if err != nil {
+				return err
+			}
+			if tag.RowsAffected() != 1 {
+				return ErrDeploymentActionConflict
+			}
+			return nil
+		})
+	}
 	tag, err := s.Pool.Exec(ctx, `
 		UPDATE deployment_runtime_actions
 		   SET step=$2,updated_at=$3,resource_version=resource_version+1
@@ -616,6 +652,19 @@ func (s *PostgresDeploymentActionStore) CompleteRuntimeAction(ctx context.Contex
 	}
 	now := s.now(time.Time{})
 	return s.Pool.WithTx(ctx, func(tx *pg.Tx) error {
+		var scope router.RouteScope
+		if runtimeState == "removed" {
+			if err := tx.QueryRow(ctx, `SELECT d.project_id,d.environment_id,d.service_id FROM deployments d
+				JOIN deployment_runtime_actions a ON a.deployment_id=d.id WHERE a.id=$1`, actionID).Scan(&scope.ProjectID, &scope.EnvironmentID, &scope.ServiceID); err != nil {
+				return err
+			}
+			if err := router.AcquireRouteEnvironmentMutationLock(ctx, tx, scope.ProjectID, scope.EnvironmentID); err != nil {
+				return err
+			}
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, "service-environment-deploy:"+scope.ServiceID+":"+scope.EnvironmentID); err != nil {
+				return err
+			}
+		}
 		var deploymentID, action string
 		if err := tx.QueryRow(ctx, `
 			UPDATE deployment_runtime_actions
@@ -633,10 +682,12 @@ func (s *PostgresDeploymentActionStore) CompleteRuntimeAction(ctx context.Contex
 		tag, err := tx.Exec(ctx, `
 			UPDATE deployments
 			   SET runtime_desired_state=$2,runtime_observed_state=$2,
+			       state=CASE WHEN $2='removed' AND active THEN 'superseded' ELSE state END,
+			       active=CASE WHEN $2='removed' THEN FALSE ELSE active END,
 			       runtime_generation=runtime_generation+1,updated_at=$3,
 			       resource_version=resource_version+1
 			 WHERE id=$1
-			   AND ($2 <> 'removed' OR active=FALSE)`,
+			   AND ($2 <> 'removed' OR active=FALSE OR runtime_desired_state='stopped')`,
 			deploymentID, runtimeState, now,
 		)
 		if err != nil {
@@ -644,6 +695,15 @@ func (s *PostgresDeploymentActionStore) CompleteRuntimeAction(ctx context.Contex
 		}
 		if tag.RowsAffected() != 1 {
 			return fmt.Errorf("%w: %s cannot set runtime state %s", ErrDeploymentActionConflict, action, runtimeState)
+		}
+		if runtimeState == "removed" {
+			// Preserve a newer deployment that won promotion while runtime removal
+			// was in flight. Only this exact removed pointer can be cleared.
+			_, err := tx.Exec(ctx, `UPDATE service_environment_state SET active_deployment_id=NULL,version=version+1,updated_at=$4
+				WHERE service_id=$1 AND environment_id=$2 AND active_deployment_id=$3`, scope.ServiceID, scope.EnvironmentID, deploymentID, now)
+			if err != nil {
+				return err
+			}
 		}
 		return nil
 	})

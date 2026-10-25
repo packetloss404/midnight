@@ -200,7 +200,7 @@ func TestDurableHTTPRoutingRestartScopeAndHonestTLSState(t *testing.T) {
 		group.ArtifactHash == "" {
 		t.Fatalf("private group = %#v", group)
 	}
-	artifactPath := filepath.Join(publicationRoot, group.RouteGroup, router.TraefikDynamicArtifactExtension)
+	artifactPath := filepath.Join(publicationRoot, group.RouteGroup+"."+router.TraefikDynamicArtifactExtension)
 	privateArtifact, err := os.ReadFile(artifactPath)
 	if err != nil {
 		t.Fatalf("read private artifact: %v", err)

@@ -15,7 +15,7 @@ stack, see [`docs/dev-local-stack.md`](dev-local-stack.md).
 
 - Docker Desktop (macOS/Windows) or Docker Engine (Linux) with the Compose
   plugin. `docker compose version` should work.
-- Go 1.25 (matches `go.mod`; the compose stack pins the same version).
+- Go 1.26.10 (the exact patch version pinned by `go.mod` and the Compose stack).
 - Node.js 20 or newer and npm 10 or newer, to build the dashboard.
 - Free localhost ports 8080, 15432, 15000, 11234, 8081, 8443, and 8082.
 - `git` and `curl`.

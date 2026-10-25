@@ -255,6 +255,7 @@ func TestPostgresIdentityInvitationRouterLifecycle(t *testing.T) {
 		"",
 		map[string]string{
 			"Authorization": adminAuthorization, "Idempotency-Key": "invite-workspace-revoke",
+			"If-Match": strongVersionETag(toRevoke.Invitation.ResourceVersion),
 		},
 	)
 	if revoke.Code != http.StatusNoContent {

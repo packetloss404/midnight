@@ -235,6 +235,9 @@ func (r BuildctlRunner) Build(ctx context.Context, inv BuildctlInvocation) (Buil
 	if err := inv.Validate(); err != nil {
 		return BuildctlResult{}, err
 	}
+	// The returned image and its evidence must identify the same repository
+	// that the exporter actually pushes to.
+	inv.Image = buildctlImageRef(inv)
 	startedAt := r.now()
 	if err := os.MkdirAll(inv.OutputDir, 0o750); err != nil {
 		return BuildctlResult{}, fmt.Errorf("buildctl: create output dir: %w", err)
@@ -516,11 +519,14 @@ func buildctlImageRef(inv BuildctlInvocation) string {
 	if inv.Registry == "" {
 		return inv.Image
 	}
-	if strings.Contains(inv.Image, "/") {
-		// Operator-supplied a full reference; respect it.
+	registry := strings.TrimSuffix(inv.Registry, "/")
+	first, _, hasPath := strings.Cut(inv.Image, "/")
+	if hasPath && (strings.ContainsAny(first, ".:") || first == "localhost" || strings.HasPrefix(inv.Image, registry+"/")) {
+		// A namespace such as midnight/web is relative to the configured
+		// registry. Preserve an explicitly qualified registry host instead.
 		return inv.Image
 	}
-	return strings.TrimSuffix(inv.Registry, "/") + "/" + inv.Image
+	return registry + "/" + inv.Image
 }
 
 // resolveImageDigest determines the pushed image digest, preferring buildctl's

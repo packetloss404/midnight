@@ -741,7 +741,7 @@ func (s *PostgresDeploymentStore) FailDeployment(ctx context.Context, id string,
 	now := s.Now()
 	extra := "failure_code = $3, failure_message = $4, completed_at = $5"
 	if from == deploy.DeploymentBuilding {
-		extra += ", build_completed_at = COALESCE(build_completed_at,$5)"
+		extra += ", build_completed_at = CASE WHEN build_started_at IS NOT NULL THEN COALESCE(build_completed_at,$5) ELSE build_completed_at END"
 	}
 	return s.transition(ctx, id, from, deploy.DeploymentFailed, extra, code, message, now)
 }
@@ -751,7 +751,7 @@ func (s *PostgresDeploymentStore) CancelDeployment(ctx context.Context, id strin
 	now := s.Now()
 	extra := "completed_at = $3"
 	if from == deploy.DeploymentBuilding {
-		extra += ", build_completed_at = COALESCE(build_completed_at,$3)"
+		extra += ", build_completed_at = CASE WHEN build_started_at IS NOT NULL THEN COALESCE(build_completed_at,$3) ELSE build_completed_at END"
 	}
 	return s.transition(ctx, id, from, deploy.DeploymentCanceled, extra, now)
 }

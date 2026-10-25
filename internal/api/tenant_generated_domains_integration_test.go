@@ -115,7 +115,7 @@ func TestTenantGeneratedDomainLifecycleAndCurrentActiveAttachment(t *testing.T) 
 		if key != "" {
 			headers["Idempotency-Key"] = key
 		}
-		response := doRouterRequest(handler, method, path, body, headers)
+		response := doRouterRequest(handler, method, path, body, integrationVersionHeaders(body, headers))
 		return &routerResponse{
 			Code: response.Code, Body: response.Body.String(),
 			Header: response.Header(),
@@ -346,8 +346,14 @@ func TestTenantGeneratedDomainLifecycleAndCurrentActiveAttachment(t *testing.T) 
 		"",
 	)
 	if viewerRead.Code != http.StatusOK ||
-		viewerRead.Header.Get("ETag") != "" {
+		viewerRead.Header.Get("ETag") != strongVersionETag(idle.Version) {
 		t.Fatalf("viewer read=%#v", viewerRead)
+	}
+	var viewerDomain TenantGeneratedDomainView
+	if err := json.Unmarshal([]byte(viewerRead.Body), &viewerDomain); err != nil ||
+		viewerDomain.ID != idle.ID || viewerDomain.ServiceID != idle.ServiceID ||
+		viewerDomain.EnvironmentID != idle.EnvironmentID {
+		t.Fatalf("viewer domain=%#v err=%v", viewerDomain, err)
 	}
 	viewerWrite := request(
 		viewer.AccessToken,
@@ -404,7 +410,7 @@ func TestTenantGeneratedDomainLifecycleAndCurrentActiveAttachment(t *testing.T) 
 		"domain-idle-stale",
 		`{"expected_version":2}`,
 	)
-	if stale.Code != http.StatusConflict ||
+	if stale.Code != http.StatusPreconditionFailed ||
 		!strings.Contains(stale.Body, `"current_version":3`) {
 		t.Fatalf("stale delete=%#v", stale)
 	}

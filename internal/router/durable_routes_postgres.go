@@ -859,6 +859,7 @@ func (s *PostgresDurableRouteStore) ReconcileManagedDeploymentRouteState(
 				ctx,
 				scope.projectID,
 				scope.environmentID,
+				"", "",
 			)
 		})
 		if err != nil {
@@ -873,6 +874,25 @@ func (s *PostgresDurableRouteStore) ReconcileManagedDeploymentRouteState(
 		result.IntentBindingsAdded += added
 	}
 	return result, nil
+}
+
+// RefreshActiveDeploymentRoutes repairs only this service's managed routes.
+// The active pointer is checked under the same locks as backend replacement;
+// a restart of a superseded deployment can never publish it over its successor.
+func (s *PostgresDurableRouteStore) RefreshActiveDeploymentRoutes(ctx context.Context, deploymentID string, scope RouteScope) error {
+	if s == nil || s.Pool == nil {
+		return errors.New("postgres durable route store pool is required")
+	}
+	if err := scope.validate(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(deploymentID) == "" {
+		return ErrDurableRouteInvalid
+	}
+	_, _, _, err := retryManagedRouteRepair(func() (int64, bool, error) {
+		return s.reconcileManagedRouteEnvironment(ctx, scope.ProjectID, scope.EnvironmentID, scope.ServiceID, deploymentID)
+	})
+	return err
 }
 
 func retryManagedRouteRepair(run func() (int64, bool, error)) (int64, bool, bool, error) {
@@ -904,12 +924,34 @@ func (s *PostgresDurableRouteStore) reconcileManagedRouteEnvironment(
 	ctx context.Context,
 	projectID string,
 	environmentID string,
+	onlyServiceID string,
+	expectedActiveID string,
 ) (int64, bool, error) {
 	var added int64
 	var changed bool
 	err := s.Pool.WithTx(ctx, func(tx *dbpg.Tx) error {
 		if err := AcquireRouteEnvironmentMutationLock(ctx, tx, projectID, environmentID); err != nil {
 			return err
+		}
+		if onlyServiceID != "" {
+			lockKey := "service-environment-deploy:" + onlyServiceID + ":" + environmentID
+			if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext($1))`, lockKey); err != nil {
+				return err
+			}
+			var activeID string
+			if err := tx.QueryRow(ctx, `
+				SELECT d.id FROM service_environment_state s
+				JOIN deployments d ON d.id=s.active_deployment_id
+				WHERE s.service_id=$1 AND s.environment_id=$2
+				  AND d.project_id=$3 AND d.service_id=$1 AND d.environment_id=$2
+				  AND d.id=$4 AND d.active=TRUE AND d.state='active'
+				  AND d.runtime_desired_state='running'
+				FOR UPDATE OF s FOR SHARE OF d`, onlyServiceID, environmentID, projectID, expectedActiveID).Scan(&activeID); err != nil {
+				if errors.Is(err, pgx.ErrNoRows) {
+					return fmt.Errorf("%w: restart deployment is no longer active and running", ErrDurableRouteScopeMismatch)
+				}
+				return err
+			}
 		}
 
 		serviceRows, err := tx.Query(ctx, `
@@ -923,8 +965,9 @@ func (s *PostgresDurableRouteStore) reconcileManagedRouteEnvironment(
 			   AND r.project_id=b.project_id AND r.environment_id=b.environment_id
 			   AND r.service_id=b.service_id
 			 WHERE b.project_id=$1 AND b.environment_id=$2
+			   AND ($3='' OR b.service_id=$3)
 			   AND `+ManagedServiceRouteEligibilityPredicateSQL+`
-			 ORDER BY b.service_id`, projectID, environmentID)
+			 ORDER BY b.service_id`, projectID, environmentID, onlyServiceID)
 		if err != nil {
 			return err
 		}
@@ -1007,10 +1050,11 @@ func (s *PostgresDurableRouteStore) reconcileManagedRouteEnvironment(
 			    ON dep.project_id=b.project_id AND dep.environment_id=b.environment_id
 			   AND dep.service_id=b.service_id
 			 WHERE b.project_id=$1 AND b.environment_id=$2
+			   AND ($4='' OR b.service_id=$4)
 			   AND dep.state IN ('queued','building','deploying','active')
 			   AND `+ManagedServiceRouteEligibilityPredicateSQL+`
 			ON CONFLICT (deployment_id,route_id) DO NOTHING`,
-			projectID, environmentID, s.now())
+			projectID, environmentID, s.now(), onlyServiceID)
 		if err != nil {
 			return err
 		}
@@ -1032,9 +1076,10 @@ func (s *PostgresDurableRouteStore) reconcileManagedRouteEnvironment(
 			   AND r.project_id=b.project_id AND r.environment_id=b.environment_id
 			   AND r.service_id=b.service_id
 			 WHERE b.project_id=$1 AND b.environment_id=$2
+			   AND ($3='' OR b.service_id=$3)
 			   AND `+ManagedServiceRouteEligibilityPredicateSQL+`
 			 ORDER BY r.id
-			 FOR UPDATE OF b,d,r`, projectID, environmentID)
+			 FOR UPDATE OF b,d,r`, projectID, environmentID, onlyServiceID)
 		if err != nil {
 			return err
 		}
@@ -1080,7 +1125,7 @@ func (s *PostgresDurableRouteStore) reconcileManagedRouteEnvironment(
 				SELECT id
 				  FROM deployments
 				 WHERE id=$1 AND project_id=$2 AND environment_id=$3 AND service_id=$4
-				   AND state='active' AND active=TRUE
+				   AND state='active' AND active=TRUE AND runtime_desired_state='running'
 				 FOR SHARE`, strings.TrimSpace(*pointer), projectID, environmentID, serviceID).Scan(&activeID)
 			if errors.Is(err, pgx.ErrNoRows) {
 				// An inconsistent pointer cannot authorize backends. Emptying the
@@ -1093,8 +1138,30 @@ func (s *PostgresDurableRouteStore) reconcileManagedRouteEnvironment(
 			activeByService[serviceID] = activeID
 		}
 
+		// Promotion stages backends before publishing and committing its active
+		// pointer. A background repair must leave that in-flight publication
+		// alone even though the previous deployment is still canonical-active.
+		preparedServices := make(map[string]bool)
+		for _, route := range routes {
+			var prepared bool
+			if err := tx.QueryRow(ctx, `
+				SELECT EXISTS (SELECT 1 FROM route_backends b JOIN deployments d ON d.id=b.deployment_id
+				WHERE b.route_id=$1 AND d.id<>$2 AND d.state IN ('queued','building','deploying'))`,
+				route.value.ID, activeByService[route.value.ServiceID]).Scan(&prepared); err != nil {
+				return err
+			}
+			if prepared {
+				if onlyServiceID != "" {
+					return fmt.Errorf("%w: newer deployment route publication is in progress", ErrDurableRouteBlocked)
+				}
+				preparedServices[route.value.ServiceID] = true
+			}
+		}
 		sets := make([]DurableRouteBackendSet, 0, len(routes))
 		for _, route := range routes {
+			if preparedServices[route.value.ServiceID] {
+				continue
+			}
 			set := DurableRouteBackendSet{RouteID: route.value.ID, Backends: []DurableRouteBackend{}}
 			activeID := activeByService[route.value.ServiceID]
 			if activeID != "" {

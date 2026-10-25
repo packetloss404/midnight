@@ -815,7 +815,7 @@ function InstanceSettings({
 						<span role="alert" className="text-xs text-danger">
 							{saveError.message}
 						</span>
-						{saveError.status === 409 ? (
+					{saveError.status === 409 || saveError.status === 412 ? (
 							<button
 								type="button"
 								onClick={() => void reloadLatest()}

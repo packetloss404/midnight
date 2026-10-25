@@ -709,12 +709,14 @@ func serveWorker(ctx context.Context, cfg workerConfig) error {
 		return errors.New("worker runtime does not implement durable runtime actions")
 	}
 	actionExecutor := deploy.ActionExecutor{
-		Store:      api.NewPostgresDeploymentActionStore(pool),
-		Runtime:    controlRuntime,
-		Instances:  baseExecutor.Instances,
-		Operations: workerOperationUpdater{store: operationStore},
-		Cancels:    workerOperationUpdater{store: operationStore},
-		StopGrace:  defaultDeployDrainGrace,
+		Store:         api.NewPostgresDeploymentActionStore(pool),
+		Runtime:       controlRuntime,
+		Instances:     baseExecutor.Instances,
+		Operations:    workerOperationUpdater{store: operationStore},
+		Cancels:       workerOperationUpdater{store: operationStore},
+		StopGrace:     defaultDeployDrainGrace,
+		Configuration: baseExecutor.Configuration,
+		Readiness:     baseExecutor.Readiness,
 	}
 	if cfg.TCPProxyBindHost != "" {
 		networkClient, clientErr := tcpproxy.NewDockerNetworkClient(cfg.DockerHost)
@@ -834,6 +836,7 @@ func serveWorker(ctx context.Context, cfg workerConfig) error {
 		}
 		actionExecutor.Routes = deploy.DurableActionRouteWithdrawer{
 			Store: routeStore, Reconciler: reconciler,
+			Readiness: baseExecutor.Readiness,
 		}
 		go router.RunDurableRouteController(ctx, reconciler, router.DefaultDurableRouteReconcileInterval, func(err error) {
 			fmt.Fprintf(os.Stderr, "durable route reconciliation failed: %v\n", err)

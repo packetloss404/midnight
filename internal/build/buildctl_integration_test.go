@@ -36,6 +36,8 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 	if binary == "" || registry == "" {
 		t.Skip("set MIDNIGHT_BUILDCTL and MIDNIGHT_BUILDKIT_REGISTRY to run this integration test")
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
 
 	tmp := t.TempDir()
 	contextDir := filepath.Join(tmp, "ctx")
@@ -44,22 +46,20 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 	}
 	dockerfile := filepath.Join(contextDir, "Dockerfile")
 	body := strings.Join([]string{
-		"# syntax=docker/dockerfile:1",
-		"FROM gcr.io/distroless/static-debian12@sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		"FROM scratch",
 		"COPY hello /hello",
-		"CMD [\"/hello\"]",
 	}, "\n") + "\n"
 	if err := os.WriteFile(dockerfile, []byte(body), 0o640); err != nil {
 		t.Fatal(err)
 	}
 	hello := filepath.Join(contextDir, "hello")
-	if err := os.WriteFile(hello, []byte("#!/bin/sh\necho midnight\n"), 0o755); err != nil {
+	if err := os.WriteFile(hello, []byte("midnight-build-integration\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
 	runner := BuildctlRunner{BuildctlPath: binary, Now: func() time.Time { return time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC) }}
-	if _, err := runner.VerifyVersion(context.Background()); err != nil {
-		t.Skipf("buildctl version check failed (got %v); skipping live solve", err)
+	if _, err := runner.VerifyVersion(ctx); err != nil {
+		t.Fatalf("configured buildctl version check: %v", err)
 	}
 
 	out1 := filepath.Join(tmp, "out1")
@@ -74,22 +74,36 @@ func TestBuildctlIntegrationProducesDeterministicDigest(t *testing.T) {
 		Insecure:       true,
 		CacheRoot:      filepath.Join(tmp, "cache"),
 	}
-	res1, err := runner.Build(context.Background(), inv)
+	res1, err := runner.Build(ctx, inv)
 	if err != nil {
 		t.Fatalf("first build: %v", err)
 	}
+	if want := strings.TrimSuffix(registry, "/") + "/" + inv.Image; res1.Image != want {
+		t.Fatalf("returned image = %q, want pushed repository %q", res1.Image, want)
+	}
 
 	inv.OutputDir = out2
-	res2, err := runner.Build(context.Background(), inv)
+	res2, err := runner.Build(ctx, inv)
 	if err != nil {
 		t.Fatalf("second build: %v", err)
 	}
 	if res1.Digest != res2.Digest {
 		t.Fatalf("digests differ across runs: %s vs %s", res1.Digest, res2.Digest)
 	}
-	provenance1, _ := os.ReadFile(res1.ProvenancePath)
-	provenance2, _ := os.ReadFile(res2.ProvenancePath)
-	if string(provenance1) != string(provenance2) {
-		t.Fatalf("provenance differs across runs")
+	for name, paths := range map[string][2]string{
+		"provenance": {res1.ProvenancePath, res2.ProvenancePath},
+		"SBOM":       {res1.SBOMPath, res2.SBOMPath},
+	} {
+		first, err := os.ReadFile(paths[0])
+		if err != nil {
+			t.Fatalf("read first %s: %v", name, err)
+		}
+		second, err := os.ReadFile(paths[1])
+		if err != nil {
+			t.Fatalf("read second %s: %v", name, err)
+		}
+		if len(first) == 0 || string(first) != string(second) {
+			t.Fatalf("%s is empty or differs across runs", name)
+		}
 	}
 }

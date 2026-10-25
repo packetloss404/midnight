@@ -82,7 +82,7 @@ step_descriptions=(
   "web-next gate0 plus security-header browser acceptance"
   "actionlint v1.7.7"
   "govulncheck v1.3.0 with integration tests"
-  "OSV Scanner v2.3.3 against Go and both npm lockfiles"
+  "OSV Scanner v2.3.3 against Go and the dashboard npm lockfile"
   "CGO-free Linux amd64 and arm64 release binary builds"
 )
 
@@ -192,7 +192,6 @@ run_govulncheck() {
 
 run_osv_scanner() {
   go run github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.3.3 scan source --lockfile=go.mod || return
-  go run github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.3.3 scan source --allow-no-lockfiles --lockfile=web/package-lock.json || return
   go run github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.3.3 scan source --lockfile=web-next/package-lock.json
 }
 

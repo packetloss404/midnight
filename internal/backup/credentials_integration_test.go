@@ -32,7 +32,7 @@ import (
 //     using only the sealed-resolved credentials.
 //
 // Default `go test ./...` skips this file because the build tag is
-// `integration`. CI environments without Docker may also skip it.
+// `integration`. The integration gate builds its pinned MinIO image first.
 func TestSealedCredentialEndToEndAgainstMinIO(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -41,7 +41,7 @@ func TestSealedCredentialEndToEndAgainstMinIO(t *testing.T) {
 	const secretKey = "midnight-sealed-test-secret"
 	const bucket = "midnight-sealed-backups"
 
-	mc, err := miniotc.Run(ctx, "minio/minio:RELEASE.2025-04-08T15-41-24Z",
+	mc, err := miniotc.Run(ctx, minioIntegrationImage,
 		miniotc.WithUsername(accessKey),
 		miniotc.WithPassword(secretKey),
 	)

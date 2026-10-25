@@ -484,6 +484,7 @@ func TestPostgresAutomationTokenRouterLifecycleAndAdmission(t *testing.T) {
 		map[string]string{
 			"Authorization":   humanAuthorization,
 			"Idempotency-Key": "revoke-ci-release",
+			"If-Match":        strongVersionETag(minted.Token.ResourceVersion),
 		},
 	)
 	if revoke.Code != http.StatusNoContent ||
@@ -498,6 +499,7 @@ func TestPostgresAutomationTokenRouterLifecycleAndAdmission(t *testing.T) {
 		map[string]string{
 			"Authorization":   humanAuthorization,
 			"Idempotency-Key": "revoke-ci-release",
+			"If-Match":        strongVersionETag(minted.Token.ResourceVersion),
 		},
 	)
 	if revokeReplay.Code != revoke.Code ||

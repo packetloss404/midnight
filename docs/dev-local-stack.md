@@ -156,7 +156,7 @@ exporting the variable or using an `--env-file`. Common ones:
 | `MIDNIGHT_DATABASE_URL` | derived | Full DSN override |
 | `MIDNIGHT_GRAPHQL_PLAYGROUND` | `1` | Enable GraphiQL at `/graphiql` |
 | `ANTHROPIC_API_KEY` | empty | Enables the dashboard agent chat panel |
-| `MIDNIGHT_GO_IMAGE_TAG` | `1.26.9` | Go toolchain tag for the `golang:<tag>-bookworm` image that runs `api`, `migrate`, and both workers; keep it equal to the `go` line in `go.mod` |
+| `MIDNIGHT_GO_IMAGE_TAG` | `1.26.10` | Go toolchain tag for the `golang:<tag>-bookworm` image that runs `api`, `migrate`, and both workers; keep it equal to the `go` line in `go.mod` |
 | `MIDNIGHT_WORKER_RUNTIME_BACKEND` | `docker` | `docker` or `local` |
 | `MIDNIGHT_WORKER_DOCKER_BASELINE` | `warn` | `enforce` or `warn`. `enforce` (the installed-host default) refuses to start when the Docker daemon does not match the required `daemon.json` baseline; `warn` logs the mismatch and continues, which is what Docker Desktop and rootless engines need |
 | `MIDNIGHT_WORKER_DEPLOY_CONCURRENCY` | `4` | Maximum deploy jobs the worker runs at once. Jobs for the same service still run one at a time |

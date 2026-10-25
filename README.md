@@ -97,7 +97,7 @@ Midnight currently exposes the OSS Railway MVP path through:
 - Postgres-backed control-plane storage with 72 sequential SQL migration pairs plus explicit memory mode for local smoke checks.
 - Durable human sessions used by both the dashboard and CLI, with tenant-scoped project/service/environment overview, remote revocation on logout, and a separately labelled installation-wide operator recovery credential. First-run CLI/console setup claims the administrator; `midnight admin reset-password` and console Emergency recovery can reset administrator credentials with explicit operator authority, TOTP preservation/replacement, and session revocation. Project/service creation and service deletion, ordinary unprotected environment creation, strict name/slug/tier environment update, atomic multi-resource environment changesets, exact service-variable metadata/create/rotate/delete, image/local-source deployment, generated-route opt-in, deployment actions/cancellation, GitHub source linking, invitations, and project automation credentials use route-specific RBAC boundaries. Human environment PATCH requires current `environment.write`, singleton idempotency, and positive resource-version CAS. Changeset reads and writes independently prove the capabilities required by every contained resource kind. Protected environment creation/state changes, environment restriction changes, environment delete/duplicate, human shared-variable management, and other unadmitted human writes remain blocked until their own atomic coordinators land.
 - Managed `midn_sa_` project automation credentials store only domain-separated HMAC verifiers, return raw bearer material once through an encrypted-idempotency response, and are admitted through a closed `ci-deploy-v1` method/route registry. They can inspect and deploy only their bound project; they cannot manage credentials, variables, installation settings, or operator routes.
-- Postgres lease queue, deploy/reconcile worker, BuildKit build worker, Docker runtime adapter, route publishing, runtime inventory, audit, backup, restore-plan, and evidence endpoints.
+- Postgres lease queue, deploy/reconcile worker, BuildKit build worker, Docker runtime adapter, route publishing, runtime inventory, audit, and recovery evidence endpoints. Real backup/restore uses `midnight-recovery` and service-volume workflows; the experimental `/backup/runs` API writes metadata manifests and does not copy application data.
 - Human image deploys remain private by default. A durable human session may
   create or remove the service/environment's one server-derived generated HTTP
   domain through the nested API, CLI, or service Networking panel. The
@@ -132,6 +132,11 @@ Executable release evidence remains defined by
 [`docs/mvp-acceptance.md`](docs/mvp-acceptance.md). Dated delivery plans are
 design history and must not be treated as current queues. Recent changes are
 tracked in [`CHANGELOG.md`](CHANGELOG.md).
+
+The [feature verification ledger](docs/feature-verification.md) maps advertised
+capabilities to executable checks and records what still needs a real worker,
+human session, provider credential, or installed-host drill. Fixture browser
+tests and memory-mode API tests are explicitly separate from runtime proof.
 
 The current CLI/API deployment verdict and the exact distinction between
 implemented, installed, and live-proven behavior are recorded in
@@ -185,7 +190,11 @@ Before calling Midnight MVP-ready, a fresh supported VM must prove the OSS Railw
 - Create the official Postgres template through the dashboard/API path, including volume intent, secret-backed credential references, backup state, and restore guidance without plaintext secrets.
 - Show the same projects, services, deploys, hosts, routes, logs, audit evidence, backups, and recovery states through dashboard/API/CLI surfaces.
 - Produce typed reason codes for one failed deploy, one host degradation, and one backup/restore failure.
-- Pass `local-gate`, `surface-agreement`, `package-template`, `real-app`, `audit`, and `backup` as separate `scripts/mvp-acceptance.sh` runner modes with shareable, redacted evidence.
+- Pass `local-gate`, `surface-agreement`, `package-template`, `real-app`, and
+  `audit` as separate `scripts/mvp-acceptance.sh` runner modes with redacted
+  evidence, then complete the real off-host backup/restore/readback drill in
+  [`docs/runbooks/backup-restore.md`](docs/runbooks/backup-restore.md). The
+  runner's `backup` mode checks experimental metadata and restore plans only.
 
 ## Local Commands
 

@@ -259,13 +259,24 @@ func TestPostgresUsageReconciliationReplayAndTenantBoundary(t *testing.T) {
 		t.Fatalf("bounded HTTP coverage=%+v elapsed=%v", httpCoverage, elapsed)
 	}
 	runner := &pg.MigrationRunner{Pool: pool, FS: migrations.FS, ManifestPath: "manifest.yaml"}
+	migrationHistory, err := pg.ListApplied(ctx, pool)
+	if err != nil || len(migrationHistory) == 0 {
+		t.Fatalf("list applied migrations: %v", err)
+	}
+	latestVersion := migrationHistory[len(migrationHistory)-1].Version
+	for index := len(migrationHistory) - 1; index >= 0 && migrationHistory[index].Version > 69; index-- {
+		down, err := runner.Down(ctx)
+		if err != nil || down == nil || down.Version != migrationHistory[index].Version {
+			t.Fatalf("rollback later migration %d: result=%#v err=%v", migrationHistory[index].Version, down, err)
+		}
+	}
 	down, err := runner.Down(ctx)
 	if err != nil || down == nil || down.Version != 69 {
 		t.Fatalf("down migration 69=%#v err=%v", down, err)
 	}
 	up, err := runner.Up(ctx)
-	if err != nil || len(up) != 1 || up[0].Version != 69 {
-		t.Fatalf("reapply migration 69=%#v err=%v", up, err)
+	if err != nil || len(up) != latestVersion-68 || up[0].Version != 69 || up[len(up)-1].Version != latestVersion {
+		t.Fatalf("reapply migrations 69 through %d=%#v err=%v", latestVersion, up, err)
 	}
 }
 

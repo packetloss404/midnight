@@ -8,6 +8,56 @@ correspond to individual public commits. See [Public Git History](README.md#publ
 
 ## Unreleased
 
+### Fixed (2026-10-25, feature verification)
+
+- Updated the pinned Go toolchain to 1.26.10 to address the `crypto/x509`
+  vulnerability GO-2026-6809 across builds and CI.
+- Added default browser journeys against a real local Go API for project and
+  service creation, typed unavailable image-deploy intake in memory mode,
+  responsive inspection, documentation, and unavailable usage. Added the
+  missing Vite GraphQL proxy; no running workload is invented by the tests.
+- Kept `midnight up` follow timeouts resumable when SSE connection setup hits
+  its deadline, using REST status before reporting a deployment failure.
+- Corrected namespaced Buildctl image targets to use the configured registry,
+  including the returned image reference and provenance/SBOM subject.
+- Made retained operator source uploads inherit existing eligible managed
+  routes in the durable intake transaction, preserving private defaults and
+  the canonical publication fence. Added generated/custom eligibility,
+  replay, and injected-failure rollback regression coverage.
+- Made restart actions wait for configured application readiness, record
+  current runtime addresses, and republish managed routes before reporting
+  success. Scoped route refresh and startup canonical repair preserve a
+  prepared successor's publication. Added restart/address and promotion-fence
+  regression checks; installed acceptance remains separate.
+- Aligned worker removal with the API's stop-then-remove contract: a running
+  active deployment remains protected, while a stopped one can be removed.
+  Completion retires the target and clears only its own active pointer,
+  preserving a successor promoted concurrently. Stop records stopped intent
+  so startup route repair cannot restore traffic for a stopped workload.
+- Kept human administrators on tenant changeset and variable authority, refreshed
+  tenant metadata after apply, restored the Changes advanced menu, and added
+  required runtime-write preconditions and stale-write reload recovery.
+- Retried membership transactions after PostgreSQL serialization/deadlock
+  conflicts so a losing conditional writer receives the typed version
+  conflict. Canceling or failing a build with no recorded start leaves its
+  build window unknown instead of fabricating completion evidence.
+- Corrected the MVP runner's obsolete dashboard directory and replaced the
+  legacy template queue assertion with canonical PostgreSQL provisioning,
+  connectivity, replacement-persistence, and cleanup checks. Added runner
+  regression coverage for failed, incomplete, timed-out, and unsafe replies.
+- Made real-app acceptance select exact project/service/environment IDs and
+  an existing managed domain, poll terminal operation state, and require the
+  matching canonical active deployment plus an identifying HTTPS response.
+  Saved HTTP/TLS policy is preserved when HTTPS terminates at an external edge.
+- Added a Docker/PostgreSQL CI gate that requires real durable canaries and
+  records skipped tests. Published a feature verification ledger, corrected
+  the pinned Go version, and clarified that backup metadata/restore plans and
+  synthetic surface inputs do not satisfy runtime or recovery acceptance.
+- Added separate real BuildKit/registry and Traefik HTTP replacement checks,
+  exact-source MinIO S3/credential tests, and a PostgreSQL browser lane for
+  real TOTP enrollment, human sessions, variables, changeset apply, and stale
+  configuration writes. Installed and external-provider proof remains separate.
+
 ### Fixed (2026-10-24, public dependency scan)
 
 - Updated Vitest and its development-only packages to 4.1.12 to address two

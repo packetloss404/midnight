@@ -64,8 +64,12 @@ func TestSourceLinkStoreCanonicalPersistenceAndRevocation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("migrations up: %v", err)
 	}
-	if len(applied) == 0 || applied[len(applied)-1].Version != 50 {
-		t.Fatalf("latest migration = %#v, want 50", applied)
+	_, manifest, err := dbpg.LoadOrderedMigrations(migrations.FS, "manifest.yaml")
+	if err != nil {
+		t.Fatalf("load current migration manifest: %v", err)
+	}
+	if len(applied) != manifest.SchemaVersion || applied[len(applied)-1].Version != manifest.SchemaVersion {
+		t.Fatalf("applied migrations = %#v, want complete schema %d", applied, manifest.SchemaVersion)
 	}
 
 	if _, err := pool.Exec(ctx, `
@@ -376,6 +380,22 @@ func TestSourceLinkStoreCanonicalPersistenceAndRevocation(t *testing.T) {
 		t.Fatalf("installation after revoke = %v", err)
 	}
 
+	// Exercise the intended 50 -> 49 downgrade at both checkpoints, even
+	// when the full initial schema and re-upgrade include newer migrations.
+	rollbackAfterSourceLinkMigration := func() {
+		t.Helper()
+		history, err := dbpg.ListApplied(ctx, pool)
+		if err != nil || len(history) == 0 {
+			t.Fatalf("list applied migrations: %v", err)
+		}
+		for index := len(history) - 1; index >= 0 && history[index].Version > 50; index-- {
+			down, err := runner.Down(ctx)
+			if err != nil || down == nil || down.Version != history[index].Version {
+				t.Fatalf("rollback later migration %d: result=%#v err=%v", history[index].Version, down, err)
+			}
+		}
+	}
+	rollbackAfterSourceLinkMigration()
 	down, err := runner.Down(ctx)
 	if err != nil || down == nil || down.Version != 50 {
 		t.Fatalf("down migration 50 = %#v, error = %v", down, err)
@@ -395,10 +415,11 @@ func TestSourceLinkStoreCanonicalPersistenceAndRevocation(t *testing.T) {
 	}
 	applied, err = runner.Up(ctx)
 	if err != nil ||
-		len(applied) != 2 ||
+		len(applied) != manifest.SchemaVersion-48 ||
 		applied[0].Version != 49 ||
-		applied[1].Version != 50 {
-		t.Fatalf("reapply migrations 49-50 = %#v, error = %v", applied, err)
+		applied[1].Version != 50 ||
+		applied[len(applied)-1].Version != manifest.SchemaVersion {
+		t.Fatalf("reapply migrations 49 through %d = %#v, error = %v", manifest.SchemaVersion, applied, err)
 	}
 	var quarantined string
 	if err := pool.QueryRow(ctx, `
@@ -423,6 +444,7 @@ func TestSourceLinkStoreCanonicalPersistenceAndRevocation(t *testing.T) {
 	if err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM service_github_links`).Scan(&canonicalCount); err != nil || canonicalCount != 0 {
 		t.Fatalf("legacy source activated canonical links: count=%d error=%v", canonicalCount, err)
 	}
+	rollbackAfterSourceLinkMigration()
 	down, err = runner.Down(ctx)
 	if err != nil || down == nil || down.Version != 50 {
 		t.Fatalf("final down migration 50 = %#v, error = %v", down, err)

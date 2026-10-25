@@ -174,6 +174,7 @@ export function StagedChangesBanner({
     );
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: queryKeys.environmentResources(environmentId) }),
+      queryClient.invalidateQueries({ queryKey: ["tenant-service-environment-variables"] }),
       queryClient.invalidateQueries({ queryKey: ["service-environment-config"] }),
       queryClient.invalidateQueries({ queryKey: ["tenant-generated-domains"] }),
       queryClient.invalidateQueries({ queryKey: ["volume-recovery"] }),
@@ -527,7 +528,7 @@ export function StagedChangesBanner({
 
         {changes.length > 0 || changeset || staleRevision ? (
           <section
-            className={`pointer-events-auto overflow-hidden rounded-[var(--r-lg)] border border-staged bg-surface-2 shadow-[var(--shadow-lg)] ${
+            className={`pointer-events-auto rounded-[var(--r-lg)] border border-staged bg-surface-2 shadow-[var(--shadow-lg)] ${
               reviewOpen
                 ? "max-sm:fixed max-sm:inset-0 max-sm:z-50 max-sm:flex max-sm:flex-col max-sm:rounded-none"
                 : ""

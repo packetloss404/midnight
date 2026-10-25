@@ -44,6 +44,51 @@ For a smaller change, run the matching focused checks:
 - `make release-check` for release, gate, contract, or tooling changes
 - `make ci-local-test` after changing the local gate itself
 
+## Disposable end-to-end jobs
+
+The `test` workflow has separate Docker/PostgreSQL integration, real
+BuildKit/Traefik runtime, and PostgreSQL human-session browser jobs. They are
+additional to the default Go/race and web `test:gate0` checks; `make ci-local`
+does not implicitly run these three jobs.
+
+```sh
+bash scripts/ci/integration-gate.sh
+bash scripts/ci/live-runtime-gate.sh
+(cd web-next && npx playwright test --config playwright.postgres.config.ts)
+```
+
+The integration gate needs Docker, Go, jq, and Python 3. It builds the S3 test server
+from pinned MinIO source because the old Docker Hub/Quay binary images are
+unavailable, runs all integration-tagged packages with an independent reaper
+session per executable, and requires actual pass
+events for durable boot/restart, source intake/materialization, Docker
+one-off/volume replacement, and S3/sealed-credential round trips. Supplying
+`MIDNIGHT_IDENTITY_TEST_DSN` also makes its administrator-recovery canary
+mandatory; hosted CI provides a disposable PostgreSQL service. Skipped tests
+remain a separate ledger, not successful execution evidence.
+
+The runtime gate requires Linux Docker with privileged containers and host
+networking. It owns disposable BuildKit, registry, and Traefik fixtures.
+Required checks perform real builds/pushes and verify Traefik's HTTP backend
+marker, watched replacement, and unknown-host 404. This gate does not deploy
+the built image through Midnight's worker or prove external DNS/HTTPS.
+
+The PostgreSQL browser lane needs Node/npm, Chromium, Go, and Linux/macOS
+key-file permissions. Its startup script creates its own PostgreSQL Docker
+container, or accepts `MIDNIGHT_PG_E2E_DSN` only for a disposable loopback
+database named `midnight_browser_e2e`. Ports 4182/4183 must be free. The real
+browser covers enrollment/TOTP, sessions, desired configuration and encrypted
+variables, compare-and-swap, and logout revocation, with no request mocks.
+CI uses a separate disposable PostgreSQL service and retains failure
+diagnostics. No production database or external provider account is needed.
+
+Integration JSON results and skip names are written to
+`artifacts/ci-integration/`; runtime results/logs go to
+`artifacts/ci-live-runtime/`. The workflow uploads both even on failure.
+Per-commit job results, rather than the presence of these commands, establish
+which assertions passed. See [feature verification](../feature-verification.md)
+for the remaining installed/external boundaries.
+
 ## Hosted-runner continuity
 
 Every workflow resolves `runs-on` from the repository variable

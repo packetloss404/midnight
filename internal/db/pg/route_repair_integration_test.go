@@ -6,6 +6,7 @@ package pg_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,8 +15,274 @@ import (
 
 	"github.com/midnight/midnight/internal/api"
 	"github.com/midnight/midnight/internal/db/pg"
+	"github.com/midnight/midnight/internal/deploy"
+	"github.com/midnight/midnight/internal/queue"
 	"github.com/midnight/midnight/internal/router"
+	"github.com/midnight/midnight/internal/runtime"
+	"github.com/midnight/midnight/pkg/orailtypes"
 )
+
+func TestActiveDeploymentRouteRefreshConvergesAddressesAndFencesPreparedPublication(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
+	defer cancel()
+	container, dsn := startPostgres(t, ctx)
+	t.Cleanup(func() { _ = container.Terminate(context.Background()) })
+	pool := newPool(t, ctx, dsn)
+	runMigrations(t, ctx, pool)
+	resources := api.NewPostgresResourceStore(pool)
+	project, err := resources.CreateProject(ctx, api.Project{WorkspaceID: api.DefaultWorkspaceID, Slug: "route-refresh"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	environment, err := resources.CreateEnvironment(ctx, api.Environment{ProjectID: project.ID, Slug: "production", Tier: "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	store := router.NewPostgresDurableRouteStore(pool)
+	var scopes []router.RouteScope
+	var routes []router.DurableHTTPRoute
+	for _, slug := range []string{"web", "other"} {
+		service, err := resources.CreateService(ctx, api.Service{ProjectID: project.ID, Slug: slug})
+		if err != nil {
+			t.Fatal(err)
+		}
+		scope := router.RouteScope{ProjectID: string(project.ID), EnvironmentID: string(environment.ID), ServiceID: string(service.ID)}
+		seedRouteRepairActiveDeployment(t, ctx, pool, scope.ProjectID, scope.EnvironmentID, scope.ServiceID, "dep_refresh_"+slug, now)
+		domain, route, err := router.BuildDomainRouteIntent(router.DomainRouteIntentInput{Scope: scope, Kind: router.DomainKindGenerated, AppsDomain: "apps.example.test", PathPrefix: "/", TargetPort: 8080, Public: true})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if domain, err = store.PutDomain(ctx, domain); err != nil {
+			t.Fatal(err)
+		}
+		if route, err = store.PutHTTPRoute(ctx, route); err != nil {
+			t.Fatal(err)
+		}
+		if err := pool.WithTx(ctx, func(tx *pg.Tx) error { return store.BindServiceDomainInTx(ctx, tx, domain.ID, route.ID, scope, now) }); err != nil {
+			t.Fatal(err)
+		}
+		scopes, routes = append(scopes, scope), append(routes, route)
+	}
+	if _, err := store.ReconcileManagedDeploymentRouteState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	instances := deploy.NewInstanceStore(pool)
+	for _, slug := range []string{"web", "other"} {
+		if err := instances.Observe(ctx, runtime.RoutingTarget{DeploymentID: "dep_refresh_" + slug, InstanceID: "dep_refresh_" + slug + "-r0", ContainerID: "ctr-refreshed-" + slug, ContainerIP: "10.44.0.70", Ready: true}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertURL := func(routeID, deploymentID, instanceID, want string) {
+		t.Helper()
+		var got string
+		if err := pool.QueryRow(ctx, `SELECT service_url FROM route_backends WHERE route_id=$1 AND deployment_id=$2 AND instance_id=$3`, routeID, deploymentID, instanceID).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Fatalf("backend=%q want %q", got, want)
+		}
+	}
+	if err := store.RefreshActiveDeploymentRoutes(ctx, "dep_refresh_web", scopes[0]); err != nil {
+		t.Fatal(err)
+	}
+	assertURL(routes[0].ID, "dep_refresh_web", "dep_refresh_web-r0", "http://10.44.0.70:8080")
+	assertURL(routes[1].ID, "dep_refresh_other", "dep_refresh_other-r0", "http://10.44.0.10:8080")
+	// A periodic runtime observation repairs the other service on its next pass.
+	if _, err := store.ReconcileManagedDeploymentRouteState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertURL(routes[1].ID, "dep_refresh_other", "dep_refresh_other-r0", "http://10.44.0.70:8080")
+
+	// Stage a newer candidate's publication while the old active pointer is
+	// intentionally retained, exactly as the promotion protocol does.
+	if _, err := pool.Exec(ctx, `INSERT INTO deployments (id,project_id,service_id,environment_id,action,image_ref,image_digest,state,active,trigger_key,created_at,updated_at)
+		SELECT 'dep_refresh_candidate',project_id,service_id,environment_id,action,image_ref,image_digest,'queued',FALSE,'trigger:refresh-candidate',$2,$2 FROM deployments WHERE id=$1`, "dep_refresh_web", now); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deployments SET state='deploying' WHERE id='dep_refresh_candidate'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE route_backends SET deployment_id='dep_refresh_candidate',instance_id='dep_refresh_candidate-'||instance_id,service_url='http://10.44.0.90:8080' WHERE route_id=$1`, routes[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	group, err := store.LoadRouteGroup(ctx, scopes[0].ProjectID, scopes[0].EnvironmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReconcileManagedDeploymentRouteState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	assertURL(routes[0].ID, "dep_refresh_candidate", "dep_refresh_candidate-dep_refresh_web-r0", "http://10.44.0.90:8080")
+	if err := store.RefreshActiveDeploymentRoutes(ctx, "dep_refresh_web", scopes[0]); !errors.Is(err, router.ErrDurableRouteBlocked) {
+		t.Fatalf("prepared publication refresh=%v", err)
+	}
+	if err := store.RefreshActiveDeploymentRoutes(ctx, "dep_refresh_candidate", scopes[0]); !errors.Is(err, router.ErrDurableRouteScopeMismatch) {
+		t.Fatalf("non-active candidate refresh=%v", err)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deployments SET runtime_desired_state='stopped' WHERE id='dep_refresh_web'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.RefreshActiveDeploymentRoutes(ctx, "dep_refresh_web", scopes[0]); !errors.Is(err, router.ErrDurableRouteScopeMismatch) {
+		t.Fatalf("stopped deployment refresh=%v", err)
+	}
+	after, err := store.LoadRouteGroup(ctx, scopes[0].ProjectID, scopes[0].EnvironmentID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if group.DesiredRevision != after.DesiredRevision {
+		t.Fatalf("prepared/fenced publication revision changed %d -> %d", group.DesiredRevision, after.DesiredRevision)
+	}
+	if _, err := pool.Exec(ctx, `UPDATE deployments SET state='failed',failure_code='fixture_done' WHERE id='dep_refresh_candidate'`); err != nil {
+		t.Fatal(err)
+	}
+	actions := api.NewPostgresDeploymentActionStore(pool)
+	// A raw Docker-ready observation cannot authorize startup publication
+	// while a restart is still at its durable pre-readiness checkpoint.
+	restart, err := actions.CommitRuntimeAction(ctx, api.RuntimeActionRequest{ServiceID: scopes[0].ServiceID, TargetID: "dep_refresh_web", Action: deploy.RuntimeActionRestart, TriggerKey: "restart:stopped-fixture"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := actions.BeginRuntimeAction(ctx, restart.ActionID, string(restart.Operation.ID)); err != nil {
+		t.Fatal(err)
+	}
+	if err := actions.RecordRuntimeActionStep(ctx, restart.ActionID, "stopped"); err != nil {
+		t.Fatal(err)
+	}
+	if err := instances.Observe(ctx, runtime.RoutingTarget{DeploymentID: "dep_refresh_web", InstanceID: "dep_refresh_web-r0", ContainerID: "ctr-restarting", ContainerIP: "10.44.0.71", Ready: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.ReconcileManagedDeploymentRouteState(ctx); err != nil {
+		t.Fatal(err)
+	}
+	var count int
+	if err := pool.QueryRow(ctx, `SELECT count(*) FROM route_backends WHERE route_id=$1`, routes[0].ID).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("startup published pre-readiness restart: count=%d err=%v", count, err)
+	}
+	if err := actions.RecordRuntimeActionStep(ctx, restart.ActionID, "started"); err != nil {
+		t.Fatal(err)
+	}
+	var desired, observed string
+	if err := pool.QueryRow(ctx, `SELECT runtime_desired_state,runtime_observed_state FROM deployments WHERE id='dep_refresh_web'`).Scan(&desired, &observed); err != nil || desired != "running" || observed != "unknown" {
+		t.Fatalf("ready checkpoint desired=%s observed=%s err=%v", desired, observed, err)
+	}
+	if err := actions.CompleteRuntimeAction(ctx, restart.ActionID, "running"); err != nil {
+		t.Fatal(err)
+	}
+	publication, err := router.NewTraefikDynamicPublicationDirectory(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	withdrawer := deploy.DurableActionRouteWithdrawer{Store: store, Reconciler: &router.DurableRouteReconciler{Store: store, Publisher: publication, Verifier: routeRepairPublicationVerifier{}}}
+	for index, slug := range []string{"web", "other"} {
+		t.Run("stop-remove-"+slug, func(t *testing.T) {
+			scope, depID := scopes[index], "dep_refresh_"+slug
+			if _, err := actions.CommitRuntimeAction(ctx, api.RuntimeActionRequest{ServiceID: scope.ServiceID, TargetID: depID, Action: deploy.RuntimeActionRemove, TriggerKey: "remove-running:" + slug}); err == nil {
+				t.Fatal("API allowed removal of active running deployment")
+			}
+			stop, err := actions.CommitRuntimeAction(ctx, api.RuntimeActionRequest{ServiceID: scope.ServiceID, TargetID: depID, Action: deploy.RuntimeActionStop, TriggerKey: "stop:" + slug})
+			if err != nil {
+				t.Fatal(err)
+			}
+			record, err := actions.BeginRuntimeAction(ctx, stop.ActionID, string(stop.Operation.ID))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := withdrawer.WithdrawDeployment(ctx, record); err != nil {
+				t.Fatal(err)
+			}
+			if err := actions.RecordRuntimeActionStep(ctx, stop.ActionID, "route_withdrawn"); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.ReconcileManagedDeploymentRouteState(ctx); err != nil {
+				t.Fatal(err)
+			}
+			if err := pool.QueryRow(ctx, `SELECT count(*) FROM route_backends WHERE deployment_id=$1`, depID).Scan(&count); err != nil || count != 0 {
+				t.Fatalf("startup resurrected withdrawn stop: count=%d err=%v", count, err)
+			}
+			rt := &routeRepairActionRuntime{}
+			executor := deploy.ActionExecutor{Store: actions, Runtime: rt, Instances: instances, Routes: withdrawer, Operations: routeRepairActionOperations{}}
+			execute := func(result api.DeploymentActionResult, action deploy.RuntimeAction) {
+				t.Helper()
+				payload, _ := json.Marshal(deploy.DeploymentActionJobPayload{SchemaVersion: deploy.DeploymentActionJobPayloadSchema, ActionID: result.ActionID, OperationID: string(result.Operation.ID), DeploymentID: depID, Action: action})
+				out, err := executor.Execute(ctx, queue.Job{ID: "job-lifecycle", Payload: payload})
+				if err != nil || !out.Succeeded {
+					t.Fatalf("%s outcome=%#v err=%v", action, out, err)
+				}
+			}
+			execute(stop, deploy.RuntimeActionStop)
+			remove, err := actions.CommitRuntimeAction(ctx, api.RuntimeActionRequest{ServiceID: scope.ServiceID, TargetID: depID, Action: deploy.RuntimeActionRemove, TriggerKey: "remove:" + slug})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if index == 1 {
+				rt.removeHook = func() error {
+					return pool.WithTx(ctx, func(tx *pg.Tx) error {
+						for _, q := range []string{
+							`UPDATE deployments SET state='superseded',active=FALSE WHERE id='dep_refresh_other'`,
+							`INSERT INTO deployments (id,project_id,service_id,environment_id,action,image_ref,image_digest,state,active,trigger_key) SELECT 'dep_refresh_winner',project_id,service_id,environment_id,action,image_ref,image_digest,'queued',FALSE,'trigger:refresh-winner' FROM deployments WHERE id='dep_refresh_other'`,
+							`UPDATE deployments SET state='deploying' WHERE id='dep_refresh_winner'`,
+							`UPDATE deployments SET state='active',active=TRUE WHERE id='dep_refresh_winner'`,
+							`UPDATE service_environment_state SET active_deployment_id='dep_refresh_winner' WHERE active_deployment_id='dep_refresh_other'`,
+						} {
+							if _, err := tx.Exec(ctx, q); err != nil {
+								return err
+							}
+						}
+						return nil
+					})
+				}
+			}
+			execute(remove, deploy.RuntimeActionRemove)
+			var state string
+			var active bool
+			var pointer *string
+			if err := pool.QueryRow(ctx, `SELECT state,active,runtime_desired_state,runtime_observed_state FROM deployments WHERE id=$1`, depID).Scan(&state, &active, &desired, &observed); err != nil {
+				t.Fatal(err)
+			}
+			if state != "superseded" || active || desired != "removed" || observed != "removed" {
+				t.Fatalf("removed deployment state=%s active=%t runtime=%s/%s", state, active, desired, observed)
+			}
+			if err := pool.QueryRow(ctx, `SELECT active_deployment_id FROM service_environment_state WHERE service_id=$1 AND environment_id=$2`, scope.ServiceID, scope.EnvironmentID).Scan(&pointer); err != nil {
+				t.Fatal(err)
+			}
+			if (index == 0 && pointer != nil) || (index == 1 && (pointer == nil || *pointer != "dep_refresh_winner")) {
+				t.Fatalf("removed deployment cleared wrong active pointer: %v", pointer)
+			}
+		})
+	}
+}
+
+type routeRepairActionRuntime struct{ removeHook func() error }
+
+func (*routeRepairActionRuntime) Start(context.Context, string, string) error { return nil }
+func (*routeRepairActionRuntime) Stop(context.Context, string, string, time.Duration) error {
+	return nil
+}
+func (r *routeRepairActionRuntime) Remove(context.Context, string, string) error {
+	if r.removeHook != nil {
+		return r.removeHook()
+	}
+	return nil
+}
+
+type routeRepairActionOperations struct{}
+
+func (routeRepairActionOperations) Transition(_ context.Context, id orailtypes.ID, state orailtypes.OperationState) (orailtypes.Operation, error) {
+	return orailtypes.Operation{ID: id, State: state}, nil
+}
+func (routeRepairActionOperations) Fail(context.Context, orailtypes.ID, orailtypes.FailureCode, string) (orailtypes.Operation, error) {
+	return orailtypes.Operation{}, nil
+}
+
+type routeRepairPublicationVerifier struct{}
+
+func (routeRepairPublicationVerifier) VerifyRoutePublication(context.Context, router.DurableRouteGroup, []router.RouteInput, string) (router.RoutePublicationVerification, error) {
+	return router.RoutePublicationVerification{TraefikAcknowledged: true, IngressProbeSucceeded: true, ProbeStatus: 200, ObservedAt: time.Now().UTC()}, nil
+}
 
 func TestManagedDeploymentRouteStartupRepairIsIdempotentAndOwnershipBound(t *testing.T) {
 	if testing.Short() {
@@ -598,8 +865,7 @@ func TestPrivateRouteReconcileSkipsUnchangedDurableAttemptButRepairsArtifact(t *
 
 	artifactPath := filepath.Join(
 		publicationRoot,
-		group.RouteGroup,
-		router.TraefikDynamicArtifactExtension,
+		group.RouteGroup+"."+router.TraefikDynamicArtifactExtension,
 	)
 	if err := os.WriteFile(artifactPath, []byte("corrupted\n"), 0o640); err != nil {
 		t.Fatal(err)

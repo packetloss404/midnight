@@ -22,6 +22,24 @@ type fakeCommandRunner struct {
 	captured      []capturedExec
 }
 
+func TestBuildctlPushTargetHonorsRegistryAndNamespaces(t *testing.T) {
+	for _, test := range []struct{ image, registry, want string }{
+		{"web:latest", "registry.test:5000", "registry.test:5000/web:latest"},
+		{"midnight/web:latest", "registry.test:5000", "registry.test:5000/midnight/web:latest"},
+		{"other.test/team/web:latest", "registry.test:5000", "other.test/team/web:latest"},
+		{"localhost/team/web:latest", "registry.test:5000", "localhost/team/web:latest"},
+		{"registry/team/web:latest", "registry", "registry/team/web:latest"},
+		{"midnight/web:latest", "", "midnight/web:latest"},
+	} {
+		t.Run(test.image+"_via_"+test.registry, func(t *testing.T) {
+			invocation := BuildctlInvocation{Image: test.image, Registry: test.registry}
+			if got := buildctlImageRef(invocation); got != test.want {
+				t.Fatalf("push target = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
 type capturedExec struct {
 	name string
 	args []string
@@ -126,6 +144,9 @@ func TestBuildEmitsProvenanceSBOMAndDigestDeterministically(t *testing.T) {
 	if res.Digest != digest {
 		t.Fatalf("digest = %q, want %q", res.Digest, digest)
 	}
+	if res.Image != "registry.midnight.local:5000/midnight/demo:phase1" {
+		t.Fatalf("returned image = %q, want the actual registry push target", res.Image)
+	}
 	if res.BuildKitVer != RequiredBuildKitVersion {
 		t.Fatalf("BuildKitVer = %q, want %q", res.BuildKitVer, RequiredBuildKitVersion)
 	}
@@ -140,6 +161,9 @@ func TestBuildEmitsProvenanceSBOMAndDigestDeterministically(t *testing.T) {
 	}
 	if stmt.Predicate.RunDetails.Builder.ID != "midnight-buildkit/"+RequiredBuildKitVersion {
 		t.Fatalf("builder id = %q", stmt.Predicate.RunDetails.Builder.ID)
+	}
+	if len(stmt.Subject) != 1 || stmt.Subject[0].Name != res.Image {
+		t.Fatalf("provenance subject = %#v, want returned push target %q", stmt.Subject, res.Image)
 	}
 	if len(stmt.Predicate.BuildDefinition.ResolvedDependencies) != 1 {
 		t.Fatalf("resolved deps = %d, want 1", len(stmt.Predicate.BuildDefinition.ResolvedDependencies))

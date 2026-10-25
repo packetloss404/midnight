@@ -117,3 +117,16 @@ func TestDurableActionRouteWithdrawerFailsBeforeMutationWithoutReconciler(t *tes
 		t.Fatalf("route backends = %#v, want original deployment", got)
 	}
 }
+
+func TestDurableActionRouteWithdrawerPublishesLastBackendRemoval(t *testing.T) {
+	scope := router.RouteScope{ProjectID: "prj", EnvironmentID: "env", ServiceID: "svc"}
+	store := &promotionStoreFake{group: promotionGroup(router.DurableRouteBackend{ID: "backend", RouteID: "route-1", RouteScope: scope, DeploymentID: "dep-action", InstanceID: "dep-action-r0", ServiceURL: "http://10.0.0.2:8080", Ready: true})}
+	publisher := &promotionPublisherFake{}
+	w := DurableActionRouteWithdrawer{Store: store, Reconciler: promotionReadyReconciler(store, publisher)}
+	if err := w.WithdrawDeployment(context.Background(), RuntimeActionRecord{DeploymentID: "dep-action", ProjectID: scope.ProjectID, EnvironmentID: scope.EnvironmentID, ServiceID: scope.ServiceID}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.group.Routes[0].Backends) != 0 || publisher.calls != 1 {
+		t.Fatalf("last backend retained or withdrawal unpublished: backends=%v publications=%d", store.group.Routes[0].Backends, publisher.calls)
+	}
+}

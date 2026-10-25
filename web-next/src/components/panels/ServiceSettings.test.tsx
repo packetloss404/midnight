@@ -452,8 +452,8 @@ describe("ServiceSettings durable config editor", () => {
 		expect(screen.getByTestId("tcp-proxies")).toBeInTheDocument();
 	});
 
-	it("offers an explicit latest-state reload after an optimistic version conflict", async () => {
-		settings.saveError = new ApiError(409, {
+	it.each([409, 412])("offers an explicit latest-state reload after HTTP %i version conflict", async (status) => {
+		settings.saveError = new ApiError(status, {
 			error: { message: "service config version conflict" },
 		});
 		const user = userEvent.setup();

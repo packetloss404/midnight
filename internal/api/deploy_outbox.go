@@ -19,6 +19,7 @@ import (
 	"github.com/midnight/midnight/internal/failurecodes"
 	"github.com/midnight/midnight/internal/idempotency"
 	"github.com/midnight/midnight/internal/queue"
+	"github.com/midnight/midnight/internal/router"
 	"github.com/midnight/midnight/pkg/orailtypes"
 )
 
@@ -130,8 +131,23 @@ func (s *PostgresDeployOutbox) CommitDeployIntake(ctx context.Context, request D
 	deploymentEventID := s.newID("dev")
 
 	err := s.Pool.WithTx(ctx, func(tx *pg.Tx) error {
-		_, err := s.CommitDeployIntakeInTx(ctx, tx, request, outboxID, deploymentEventID)
-		return err
+		// Compatibility/operator intake must inherit the same explicit service
+		// routes as human intake. Serialize against domain creation/removal so
+		// neither admission nor a concurrent domain edit can miss this release.
+		if err := router.AcquireRouteEnvironmentMutationLock(ctx, tx, request.Deployment.ProjectID, request.Deployment.EnvironmentID); err != nil {
+			return err
+		}
+		if _, err := s.CommitDeployIntakeInTx(ctx, tx, request, outboxID, deploymentEventID); err != nil {
+			return err
+		}
+		_, err := bindServiceManagedGeneratedRoutesInTx(
+			ctx, tx, request.Deployment.ID, request.Deployment.ProjectID,
+			request.Deployment.EnvironmentID, request.Deployment.ServiceID, request.Now,
+		)
+		if err != nil {
+			return fmt.Errorf("deploy intake service-managed route bind: %w", err)
+		}
+		return nil
 	})
 	if err != nil {
 		return DeployIntakeCommitResult{}, err

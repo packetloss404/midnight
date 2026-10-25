@@ -228,6 +228,18 @@ func TestPostgresAutomationTokenLifecycleAndScope(t *testing.T) {
 		t.Fatalf("revoked token authenticated: %v", err)
 	}
 
+	// Roll back newer migrations first so this always exercises migration 40's
+	// history guard, rather than whichever migration is newest today.
+	migrationHistory, err := dbpg.ListApplied(ctx, pool)
+	if err != nil || len(migrationHistory) == 0 {
+		t.Fatalf("list applied migrations: %v", err)
+	}
+	for index := len(migrationHistory) - 1; index >= 0 && migrationHistory[index].Version > 40; index-- {
+		down, err := runner.Down(ctx)
+		if err != nil || down == nil || down.Version != migrationHistory[index].Version {
+			t.Fatalf("rollback later migration %d: result=%#v err=%v", migrationHistory[index].Version, down, err)
+		}
+	}
 	if _, err := runner.Down(ctx); err == nil ||
 		!strings.Contains(err.Error(), "token history exists") {
 		t.Fatalf("history-bearing down migration = %v", err)

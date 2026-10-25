@@ -7,7 +7,7 @@ REPEAT="${MIDNIGHT_PARITY_REPEAT:-1}"
 DRY_RUN=0
 # Keep the loop on the repository's reviewed, vulnerability-fixed Go patch
 # release even when the host has a newer but unpatched release line.
-export GOTOOLCHAIN="${MIDNIGHT_PARITY_GO_TOOLCHAIN:-go1.26.9}"
+export GOTOOLCHAIN="${MIDNIGHT_PARITY_GO_TOOLCHAIN:-go1.26.10}"
 
 usage() {
   cat <<'USAGE'

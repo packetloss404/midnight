@@ -5,6 +5,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"errors"
 	"fmt"
@@ -1476,5 +1477,33 @@ func TestStreamOperationEventsStopsAtFollowWindowWithoutFailing(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "still RUNNING after 500ms") || !strings.Contains(stderr.String(), "midnight deploy events --operation-id op_1") {
 		t.Fatalf("stderr = %q, want a bounded-follow hint", stderr.String())
+	}
+}
+
+func TestStreamOperationEventsDeadlineBeforeResponseHeaders(t *testing.T) {
+	requestStarted := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(requestStarted)
+		// Hold the response headers until the follow window ends.
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go func() {
+		select {
+		case <-requestStarted:
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+	var stdout, stderr bytes.Buffer
+	result := streamOperationEventsOnce(ctx, server.URL, "", "op_1", 7, "midnight up", "deploy", &stdout, &stderr)
+	if result.terminal || result.reason != "follow window elapsed" || result.lastSequence != 7 {
+		t.Fatalf("result=%+v, want a resumable follow-window interruption retaining cursor 7", result)
+	}
+	if stderr.Len() != 0 {
+		t.Fatalf("stderr=%q, want no failure report when the follow window expires", stderr.String())
 	}
 }

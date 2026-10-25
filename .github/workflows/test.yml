@@ -22,8 +22,108 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
       - run: go test ./... -race -count=1
+
+  integration:
+    name: Docker and Postgres integration
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: midnight
+          POSTGRES_PASSWORD: integration
+          POSTGRES_DB: midnight_identity
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U midnight -d midnight_identity"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - name: Run durable integration journeys
+        env:
+          MIDNIGHT_IDENTITY_TEST_DSN: postgres://midnight:integration@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/midnight_identity?sslmode=disable
+        run: bash scripts/ci/integration-gate.sh
+      - name: Retain integration results and skip ledger
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: integration-results
+          path: artifacts/ci-integration
+          if-no-files-found: warn
+          retention-days: 7
+
+  live-runtime:
+    name: BuildKit and Traefik end to end
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - name: Build, push, and route real HTTP
+        run: bash scripts/ci/live-runtime-gate.sh
+      - name: Retain live runtime evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-runtime-results
+          path: artifacts/ci-live-runtime
+          if-no-files-found: warn
+          retention-days: 7
+
+  browser-postgres:
+    name: Browser with durable human sessions
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: midnight_e2e
+          POSTGRES_PASSWORD: midnight_e2e
+          POSTGRES_DB: midnight_browser_e2e
+        ports:
+          - 5432/tcp
+        options: >-
+          --health-cmd "pg_isready -U midnight_e2e -d midnight_browser_e2e"
+          --health-interval 5s --health-timeout 5s --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: web-next/package-lock.json
+      - run: npm ci
+        working-directory: web-next
+      - run: npx playwright install --with-deps chromium
+        working-directory: web-next
+      - name: Exercise real setup, sessions, and configuration
+        env:
+          MIDNIGHT_PG_E2E_DSN: postgres://midnight_e2e:midnight_e2e@127.0.0.1:${{ job.services.postgres.ports['5432'] }}/midnight_browser_e2e?sslmode=disable
+        run: npx playwright test --config playwright.postgres.config.ts
+        working-directory: web-next
+      - name: Retain browser diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: postgres-browser-failures
+          path: |
+            web-next/test-results
+            web-next/playwright-report
+          if-no-files-found: warn
+          retention-days: 3
 
   web-next:
     name: web-next test
@@ -32,7 +132,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.9'
+          go-version: '1.26.10'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'

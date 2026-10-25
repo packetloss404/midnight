@@ -484,7 +484,7 @@ function ServiceDetailBody({
               environmentId={environmentId}
               section={selectedConfigureSection}
               onSectionChange={changeConfigureSection}
-              authority="operator"
+              authority={humanSession ? "human" : "operator"}
             />
           ) : humanSession ? (
             <HumanServiceConfigure
@@ -654,9 +654,11 @@ function SetupStep({
 export function HumanServiceSourceConfigure({
   serviceId,
   projectId,
+  environmentId,
 }: {
   serviceId: string;
   projectId?: string;
+  environmentId?: string;
 }) {
   if (!projectId) {
     return (
@@ -667,7 +669,7 @@ export function HumanServiceSourceConfigure({
       />
     );
   }
-  return <ServiceSourcePanel projectId={projectId} serviceId={serviceId} />;
+  return <ServiceSourcePanel projectId={projectId} serviceId={serviceId} environmentId={environmentId} />;
 }
 
 export function HumanServiceConfigure({
@@ -695,6 +697,7 @@ export function HumanServiceConfigure({
         <HumanServiceSourceConfigure
           projectId={projectId}
           serviceId={serviceId}
+          environmentId={environmentId}
         />
       ) : section === "variables" ? (
         projectId && environmentId ? (
@@ -761,12 +764,32 @@ export function ConfigurePanel({
         onSectionChange={onSectionChange}
       />
 
-      {section === "source" ? (
+      {section === "source" && authority === "human" ? (
+        <HumanServiceSourceConfigure
+          projectId={projectId}
+          serviceId={serviceId}
+          environmentId={environmentId}
+        />
+      ) : section === "source" ? (
         <CapabilityBoundary
           state="unavailable"
           title="Source connection"
           detail="Connecting a source requires signing in as a workspace member. Emergency recovery access can't do this on your behalf."
         />
+      ) : section === "variables" && authority === "human" ? (
+        projectId && environmentId ? (
+          <TenantVariablesEditor
+            projectId={projectId}
+            serviceId={serviceId}
+            environmentId={environmentId}
+          />
+        ) : (
+          <CapabilityBoundary
+            state="unavailable"
+            title="Service variables"
+            detail="A concrete project and environment are required before Midnight can load variable metadata. No variable request was sent."
+          />
+        )
       ) : section === "variables" ? (
         <CapabilityBoundary
           state="degraded"

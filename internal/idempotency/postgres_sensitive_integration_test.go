@@ -155,6 +155,18 @@ func TestPostgresSensitiveResponseReplayEncryptionAndExpiry(t *testing.T) {
 			t.Fatalf("encrypted database fields contain plaintext %q", secret)
 		}
 	}
+	// Retain the exact 44 -> 43 -> guarded-42 rollback assertion even as
+	// unrelated newer migrations are added to the manifest.
+	migrationHistory, err := dbpg.ListApplied(ctx, pool)
+	if err != nil || len(migrationHistory) == 0 {
+		t.Fatalf("list applied migrations: %v", err)
+	}
+	for index := len(migrationHistory) - 1; index >= 0 && migrationHistory[index].Version > 44; index-- {
+		down, err := runner.Down(ctx)
+		if err != nil || down == nil || down.Version != migrationHistory[index].Version {
+			t.Fatalf("rollback later migration %d: result=%#v err=%v", migrationHistory[index].Version, down, err)
+		}
+	}
 	down, err := runner.Down(ctx)
 	if err != nil || down == nil || down.Version != 44 {
 		t.Fatalf("Down() operation deployment lineage migration = %#v, err=%v", down, err)

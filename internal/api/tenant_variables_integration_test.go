@@ -115,7 +115,7 @@ func TestTenantVariableLifecycleAuthorizationReplayEncryptionAndHistory(t *testi
 		if key != "" {
 			headers["Idempotency-Key"] = key
 		}
-		response := doRouterRequest(handler, method, path, body, headers)
+		response := doRouterRequest(handler, method, path, body, integrationVersionHeaders(body, headers))
 		return tenantVariableHTTPResponse{
 			Code: response.Code, Body: response.Body.String(),
 			Replayed: response.Header().Get("Idempotent-Replayed"),
@@ -237,7 +237,7 @@ func TestTenantVariableLifecycleAuthorizationReplayEncryptionAndHistory(t *testi
 		"variable-stale-key",
 		`{"expected_version":1,"value":"must-not-win"}`,
 	)
-	if stale.Code != http.StatusConflict || staleReplay.Code != stale.Code ||
+	if stale.Code != http.StatusPreconditionFailed || staleReplay.Code != stale.Code ||
 		staleReplay.Body != stale.Body || staleReplay.Replayed != "true" {
 		t.Fatalf("stale=%#v replay=%#v", stale, staleReplay)
 	}
