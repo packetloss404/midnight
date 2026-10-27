@@ -32,6 +32,8 @@ correspond to individual public commits. See [Public Git History](README.md#publ
   Recovery checks destruction/readback, wrong passphrases/confirmation,
   staged tampering, replay, and verified fixture cleanup; local fixtures do
   not claim off-host or whole-host-loss recovery.
+- Updated the indirect `go-jose/v4` dependency to `v4.1.6` for
+  [GHSA-mgcc-cww5-fp2q](https://github.com/advisories/GHSA-mgcc-cww5-fp2q).
 
 ### Fixed (2026-10-25, feature verification)
 

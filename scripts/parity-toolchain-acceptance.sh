@@ -84,7 +84,7 @@ remove_container() {
   [[ -n "$id" ]] || return 0
   remaining=$(docker ps -aq --no-trunc --filter "id=$id") || return 1
   if [[ -n "$remaining" ]]; then
-    docker rm -f "$id" >/dev/null || return 1
+    docker rm -fv "$id" >/dev/null || return 1
   fi
   remaining=$(docker ps -aq --no-trunc --filter "id=$id") || return 1
   [[ -z "$remaining" ]]
@@ -123,6 +123,15 @@ cleanup_runtime() {
 on_exit() {
   local toolchain_exit_status=$?
   trap - EXIT
+  if ((toolchain_exit_status != 0)); then
+    # Retain diagnostics even when startup failed before a sample emitted any
+    # artifacts. Keep the owned daemon until logs have been collected.
+    printf '%s\n' "$toolchain_exit_status" >"$EVIDENCE_DIR/failed-exit-status.txt" || true
+    if [[ -n "$buildkit_id" ]]; then
+      docker logs "$buildkit_id" >"$EVIDENCE_DIR/buildkit.log" 2>&1 || true
+      tail -n 40 "$EVIDENCE_DIR/buildkit.log" >&2 || true
+    fi
+  fi
   cleanup_runtime >/dev/null 2>&1 || true
   exit "$toolchain_exit_status"
 }
@@ -160,11 +169,13 @@ registry_id=$(docker run -d --rm \
   --network-alias registry \
   -p "127.0.0.1:$registry_port:5000" \
   "registry:${REGISTRY_VERSION#v}")
-buildkit_id=$(docker run -d --rm --privileged \
+# Match deploy/oci/buildkit/Dockerfile. A rootless daemon additionally depends
+# on host user-namespace policy and is not the production daemon profile.
+buildkit_id=$(docker run -d --privileged \
   --name "$buildkit_name" \
   --network "$network_name" \
   --network-alias buildkit \
-  "moby/buildkit:${BUILDKIT_VERSION}-rootless" \
+  "moby/buildkit:${BUILDKIT_VERSION}" \
   --addr tcp://0.0.0.0:1234)
 
 for attempt in $(seq 1 30); do
