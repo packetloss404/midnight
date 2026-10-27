@@ -16,7 +16,6 @@ import (
 
 	dockervolume "github.com/moby/moby/api/types/volume"
 
-	"github.com/midnight/midnight/internal/agent/conversation"
 	"github.com/midnight/midnight/internal/agent/diagnosis"
 	"github.com/midnight/midnight/internal/agent/tools"
 	"github.com/midnight/midnight/internal/api"
@@ -1930,7 +1929,9 @@ func registerWorkerLifecycleObservers(store *api.ObservedOperationStore, pool *p
 	}
 	opts := diagnosis.Options{}
 	if enabled := diagnosis.NewRunner(diagnosis.Options{}).Enabled(); enabled {
-		caller, model, err := newWorkerDiagnosisCaller(tools.NewDefaultRegistry())
+		// Context is rendered from bounded durable reads. This written report
+		// needs no tool registry or mutation capability.
+		caller, model, err := newWorkerDiagnosisCaller(tools.New())
 		opts.Model = model
 		switch {
 		case err != nil:
@@ -1942,20 +1943,12 @@ func registerWorkerLifecycleObservers(store *api.ObservedOperationStore, pool *p
 				"build-failure diagnosis is enabled (%s) but no database pool is available; diagnosis will not run\n",
 				diagnosis.EnvEnabled)
 		default:
-			diagnosisCaller, adapterErr := diagnosis.NewAgentCaller(caller, diagnosis.AgentCallerOptions{})
-			if adapterErr != nil {
-				fmt.Fprintf(os.Stderr, "build-failure diagnosis caller adapter failed: %v\n", adapterErr)
+			wired, wiringErr := workerDiagnosisOptions(pool, store, caller, model)
+			if wiringErr != nil {
+				fmt.Fprintf(os.Stderr, "build-failure diagnosis persistence wiring failed: %v\n", wiringErr)
 				break
 			}
-			service, svcErr := conversation.NewService(conversation.Config{
-				Store: conversation.NewPostgresStore(pool),
-			})
-			if svcErr != nil {
-				fmt.Fprintf(os.Stderr, "build-failure diagnosis conversation store failed: %v\n", svcErr)
-				break
-			}
-			opts.Caller = diagnosisCaller
-			opts.Conversations = diagnosis.NewConversationStore(service, "agent:diagnosis", model)
+			opts = wired
 		}
 	}
 	runner := diagnosis.NewRunner(opts)

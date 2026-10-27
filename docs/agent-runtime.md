@@ -1,12 +1,23 @@
 # Agent runtime environment
 
-> **Status (as of this commit):** the agent is wired end to end. Chat, the tool registry, the MCP server (`/mcp/v1`), per-tool audit, the spend caps, and the build-failure diagnosis worker are all reachable in a running `midnight-server`. The read tools and four of the five mutating tools execute against the real control plane. Two limits are deliberate and documented below rather than papered over: **`deploy_from_source` is not available through the agent at all**, and **variable and deployment mutations require a signed-in administrator session** — an operator recovery token can drive redeploy/rollback but not variable changes. See [What the agent cannot do](#what-the-agent-cannot-do).
+> **Status (as of this commit):** chat, the tool registry, MCP (`/mcp/v1`), per-tool audit, and spend caps are wired into `midnight-server`. Opt-in failure diagnosis runs in `midnight-worker`, persists a scoped report, and attaches its ID through a durable operation event. Local adapter and PostgreSQL tests establish this wiring; real paid-provider execution still requires [external acceptance](remaining-e2e-acceptance.md). **`deploy_from_source` is unavailable through the agent**, and **variable and deployment mutations require a signed-in administrator session** — an operator recovery token can drive redeploy/rollback but not variable changes. See [What the agent cannot do](#what-the-agent-cannot-do).
 
-The in-product AI agent (chat panel, build-failure diagnosis, MCP server) is
-wired at `midnight-server serve` bootstrap. The chat panel works
-end-to-end whenever the selected provider's API key is set. Everything else
-documented here is optional -- the defaults are tuned for a single-tenant
-operator who just wants the panel to work.
+Chat and MCP are wired at `midnight-server serve` bootstrap. The chat panel
+requires a selected provider key, a supported model/endpoint, and administrator
+authentication. The defaults target a single trusted installation.
+
+Chat and persisted diagnosis routes accept an installation-administrator human
+session or the configured operator recovery credential. Ordinary tenant human
+sessions are refused. These routes do not implement per-project conversation
+RBAC: project/service tags describe context, while administrator authority is
+installation-wide. Use an isolated QA installation for live acceptance.
+
+The worker resolves diagnosis context from the failed operation's unique
+canonical deployment, reads bounded redacted build/runtime log tails, and sends
+no tool registry or mutation capability. It saves the report before appending
+its operation attachment event. Replayed events with an existing attachment
+avoid another provider call. Simultaneous workers before the first attachment
+can still generate duplicate reports; this is not an exactly-once guarantee.
 
 When the selected provider key is unset the server still boots; only the
 chat-send path returns a clear "caller is not configured" error. Every other

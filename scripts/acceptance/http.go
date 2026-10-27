@@ -117,7 +117,8 @@ func (r *runner) preflight(ctx context.Context, lane string) error {
 	}
 	var me struct {
 		Principal struct {
-			User string `json:"user_id"`
+			User          string `json:"user_id"`
+			InstanceAdmin bool   `json:"instance_admin"`
 		} `json:"principal"`
 		Session struct {
 			ID string `json:"id"`
@@ -128,6 +129,25 @@ func (r *runner) preflight(ctx context.Context, lane string) error {
 	}
 	if me.Principal.User == "" || me.Session.ID == "" {
 		return blocked("HUMAN_IDENTITY_UNVERIFIED")
+	}
+	if lane == "agent" || lane == "diagnosis" {
+		// Canonical conversation routes admit installation administrators,
+		// not ordinary tenant sessions. Never discover that after a paid
+		// call or real failing deployment has already been submitted.
+		if !me.Principal.InstanceAdmin {
+			return blocked("HUMAN_INSTANCE_ADMIN_SESSION_REQUIRED")
+		}
+		var conversations struct {
+			Data []json.RawMessage `json:"data"`
+		}
+		if _, err := r.api(ctx, "GET", "/api/v1alpha/agent/conversations?limit=1&project_id="+r.cfg.values["QA_PROJECT_ID"], nil, &conversations); err != nil {
+			return err
+		}
+		if conversations.Data == nil {
+			return blocked("CONVERSATION_READ_AUTHORITY_UNVERIFIED")
+		}
+		r.receipt.pass("INSTANCE_ADMIN_HUMAN_CONVERSATION_READ_AUTHORITY")
+		r.receipt.incomplete("ORDINARY_TENANT_CONVERSATION_RBAC_AND_ISOLATION")
 	}
 	var projectRows []map[string]any
 	if _, err := r.api(ctx, "GET", "/api/v1alpha/projects", nil, &projectRows); err != nil {

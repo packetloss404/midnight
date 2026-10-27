@@ -37,9 +37,19 @@ reopening the original configuration after preflight. The QA server/worker holds
 its own provider credentials.
 
 For product lanes, use a real, short-lived human session belonging to an isolated
-QA account. That account must see exactly the pinned project, and the project
-must contain exactly the pinned service and environment. Use a dedicated QA
-installation or an account with no other tenant access. The runner verifies
+QA account. The AI agent and diagnosis lanes specifically require a verified
+**installation administrator** human session and a dedicated disposable QA
+installation containing only the pinned QA resources. Current canonical
+conversation routes admit human installation administrators (or the emergency
+operator credential); ordinary tenant sessions receive 403. The runner never
+substitutes an operator credential. It checks `instance_admin=true` and performs
+a read-only canonical conversation collection request before any paid call or
+deployment intake. Administrator conversation visibility is installation-wide:
+production does not wire a tenant `ConversationScopeAuthorizer`. Ordinary tenant
+conversation RBAC and cross-tenant isolation remain explicitly unverified.
+
+The account must see exactly the pinned project, and the project must contain
+exactly the pinned service and environment. The runner verifies
 `/compat`'s exact 40-character build commit, `/auth/me`, workspace/project
 lineage, and collection contents. It rejects an HTTP API base except loopback;
 remote APIs require HTTPS. It refuses redirects so credentials cannot follow a
@@ -117,8 +127,11 @@ The actual journey is:
 An unrelated, rotated, or changed variable blocks cleanup rather than authorizing
 its deletion. Creation retries use the original idempotency key/body to recover
 a lost response. Audit rows and idempotency replay records remain as history.
-The check verifies authority through the installed product endpoints and their
-readbacks. It does not inspect encrypted database bytes or exercise a browser.
+The check verifies administrator authentication and mutation results through the
+installed product endpoints; variable tools still delegate to the existing
+tenant mutation coordinator under the authenticated human context. It does not
+claim ordinary tenant chat authority or conversation isolation, inspect encrypted
+database bytes, or exercise a browser.
 
 Official tool-loop contracts explain why a final sentence alone is insufficient:
 the application must execute the call and correlate its result before the model
@@ -159,6 +172,10 @@ service source link bound to `GITHUB_QA_BRANCH`. The branch name must start with
 `qa-midnight-`; `GITHUB_EXPECTED_HEAD` pins its current commit. The repository
 must contain a working buildable service. Real GitHub webhooks must reach the QA
 installation, with workers and registry configured for successful builds.
+The runner reads the human-scoped service link and preview collection routes;
+these support ordinary authorized tenant humans and do not use the global
+administrator-only `/github/installations` route. Current membership, workspace
+grant, and source-link authorization remain requirements of the real coordinator.
 
 Two credentials have different purposes:
 
@@ -301,7 +318,8 @@ before calling that broader lifecycle verified.
 directory ownership/modes, symlink and writable-ancestor refusal, immutable child
 configuration snapshots,
 read-only/nonzero preflight, sanitized errors and redirects, exact correlated tool
-proof, the real product conversation HTTP response shape, mutation refusal and
+proof, the conversation handler response shape and canonical router's real
+administrator/nonadministrator/anonymous admission, mutation refusal and
 versioned cleanup, lost creation responses, DNS leaf scope, lost DNS write
 acknowledgement and delayed commits, unknown GitHub write outcomes, private
 residual journals with copied-secret removal, changed-ownership refusal,

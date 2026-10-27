@@ -1,6 +1,7 @@
 # Advertised feature verification
 
-Audit date: 2026-10-25. This ledger covers the capability claims in the
+Initial audit: 2026-10-25; implementation and local verification follow-up:
+2026-10-27. This ledger covers the capability claims in the
 [README](../README.md), the console, and the
 [MVP acceptance contract](mvp-acceptance.md). It is a coverage map, not a
 declaration that every feature has passed an installed end-to-end drill.
@@ -100,8 +101,12 @@ commit-bound evidence.
   discovery, authentication, rate limits, and mutation admission. A real
   external MCP client's authenticated tool round trip is a separate check.
 - **Autonomous diagnosis.** `internal/agent/diagnosis` and API tests cover
-  observer/result persistence and event attachment. A real worker failure
-  followed by a real provider diagnosis is not implied by those tests.
+  observer/result persistence and event attachment. A mandatory real-PostgreSQL
+  canary exercises installed worker registration through a local HTTP provider
+  adapter, canonical tenant context, redaction, persisted report/event linking,
+  and replay refusal. A real worker failure followed by a real paid-provider
+  diagnosis is not implied by those tests. Chat/report API access requires an
+  installation administrator; ordinary tenant conversation RBAC is not supplied.
 - **ACME and HTTPS.** `internal/acme` tests cover durable order, budgets,
   diagnostics, provider contracts, and fail-closed route behavior. Live
   `TestLegoIssuerStagingIntegration` explicitly requires

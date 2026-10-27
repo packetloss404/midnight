@@ -21,6 +21,9 @@ correspond to individual public commits. See [Public Git History](README.md#publ
 - Selected the configured AI provider and model for automatic diagnosis;
   prevented missing MiniMax keys and SDK environment credentials from
   forwarding another provider's API key or bearer token.
+- Wired diagnosis to canonical deployment context, redacted durable logs,
+  scoped report persistence, and operation-event attachment. Added a required
+  PostgreSQL/provider-adapter canary and persisted attachment replay refusal.
 - Added credential-ready product AI/diagnosis, GitHub, and native ACME staging
   acceptance with private configuration, scoped writes, deadlines, honest
   blocked outcomes, and cleanup evidence. External execution still requires

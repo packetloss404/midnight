@@ -141,6 +141,7 @@ func TestReadyPreflightIsNonzeroAndReadOnly(t *testing.T) {
 		t.Skip("full file-mode preflight runs on Linux; Windows command blocks")
 	}
 	writes := 0
+	administrator := true
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if req.Method != "GET" {
 			writes++
@@ -155,7 +156,9 @@ func TestReadyPreflightIsNonzeroAndReadOnly(t *testing.T) {
 		case "/api/v1alpha/compat":
 			value = map[string]any{"build_commit": strings.Repeat("a", 40)}
 		case "/api/v1alpha/auth/me":
-			value = map[string]any{"principal": map[string]string{"user_id": "usr_qa"}, "session": map[string]string{"id": "session_qa"}}
+			value = map[string]any{"principal": map[string]any{"user_id": "usr_qa", "instance_admin": administrator}, "session": map[string]string{"id": "session_qa"}}
+		case "/api/v1alpha/agent/conversations":
+			value = map[string]any{"data": []any{}, "page": map[string]any{}}
 		case "/api/v1alpha/projects":
 			value = []any{map[string]string{"id": "prj_qa", "workspace_id": "ws_qa"}}
 		case "/api/v1alpha/services":
@@ -182,12 +185,26 @@ func TestReadyPreflightIsNonzeroAndReadOnly(t *testing.T) {
 	}
 	var result receipt
 	_ = json.Unmarshal(out.Bytes(), &result)
-	if result.State != "READY_NOT_EXECUTED" || result.Mode != "preflight" || writes != 0 || len(result.Checks) != 2 {
+	if result.State != "READY_NOT_EXECUTED" || result.Mode != "preflight" || writes != 0 || len(result.Checks) != 3 {
 		t.Fatal("preflight must be read-only and cannot pass")
 	}
 	for _, raw := range []string{server.URL, "midn_user_private_fixture", "prj_qa", "svc_qa", "env_qa"} {
 		if strings.Contains(out.String(), raw) {
 			t.Fatal("private scope or credential leaked")
+		}
+	}
+	administrator = false
+	if err := os.WriteFile(path, []byte(env+"DIAGNOSIS_IMAGE=registry.example.invalid/qa/failure@sha256:"+strings.Repeat("a", 64)+"\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	for _, lane := range []string{"agent", "diagnosis"} {
+		out.Reset()
+		if code := run([]string{"--lane", lane, "--env-file", path, "--execute"}, &out); code != 78 {
+			t.Fatal("ordinary human session was not blocked before execution")
+		}
+		_ = json.Unmarshal(out.Bytes(), &result)
+		if result.Reason != "HUMAN_INSTANCE_ADMIN_SESSION_REQUIRED" || writes != 0 || result.Cleanup.Attempted {
+			t.Fatal("ordinary tenant authority reached a write/cleanup path")
 		}
 	}
 }

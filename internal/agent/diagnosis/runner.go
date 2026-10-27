@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/midnight/midnight/internal/api"
+	"github.com/midnight/midnight/internal/build"
+	"github.com/midnight/midnight/internal/redaction"
 	"github.com/midnight/midnight/pkg/orailtypes"
 )
 
@@ -37,10 +39,9 @@ const DefaultModel = "claude-opus-5"
 // deadline so the underlying FSM thread is never blocked.
 const DefaultTimeout = 2 * time.Minute
 
-// MetadataFieldDiagnosisID is the key written into the operation's
-// metadata JSONB once a diagnosis conversation has been attached. The
-// dashboard reads this field to render the "Diagnosis available"
-// indicator.
+// MetadataFieldDiagnosisID names the optional embedding metadata pointer.
+// Installed workers use the durable EventNameDiagnosisAttached event instead;
+// the canonical operations table has no metadata column.
 const MetadataFieldDiagnosisID = "diagnosis_id"
 
 // EventNameDiagnosisAttached is the operation-event message tag the
@@ -133,6 +134,9 @@ type ServiceLookup interface {
 // message. All fields are optional — empty strings just suppress the
 // corresponding section in the prompt.
 type ServiceContext struct {
+	WorkspaceID    string
+	ProjectID      string
+	EnvironmentID  string
 	ServiceID      string
 	ServiceSlug    string
 	DeploymentID   string
@@ -141,10 +145,8 @@ type ServiceContext struct {
 	SpecDigest     string
 }
 
-// MetadataWriter persists the diagnosis_id pointer on the operation
-// metadata JSONB so the dashboard can surface the indicator. The
-// interface is a separate seam from OperationStore so the test suite
-// can assert the write without standing up a Postgres pool.
+// MetadataWriter is an optional attachment hook for embedders. Installed
+// workers use the durable operation event instead of a metadata column.
 type MetadataWriter interface {
 	SetDiagnosisID(ctx context.Context, operationID orailtypes.ID, conversationID string) error
 }
@@ -197,9 +199,11 @@ type Options struct {
 	// read is worse than not producing one, because it spends money and
 	// leaves no trace.
 	Conversations ConversationStore
-	// Logs, Services, Metadata and Events are the optional enrichment
-	// seams. Each one that is nil simply drops its section from the
-	// prompt (or skips its write).
+	// Logs and Services enrich the prompt. A configured service lookup must
+	// succeed before the model is called, so production never saves an
+	// unscoped diagnosis when canonical tenant lineage cannot be resolved.
+	// Metadata is an optional embedding hook; installed workers attach the
+	// completed report through Events.
 	Logs     LogTailer
 	Services ServiceLookup
 	Metadata MetadataWriter
@@ -323,6 +327,12 @@ func (r *Runner) OnFailed(ctx context.Context, op orailtypes.Operation, events [
 	if _, ok := diagnosableKinds[strings.TrimSpace(op.Kind)]; !ok {
 		return
 	}
+	for _, event := range events {
+		if strings.HasPrefix(event.Message, EventNameDiagnosisAttached+" diagnosis_id=") &&
+			strings.TrimSpace(strings.TrimPrefix(event.Message, EventNameDiagnosisAttached+" diagnosis_id=")) != "" {
+			return // A completed, durably attached report survives worker restart.
+		}
+	}
 	if !r.claim(op.ID) {
 		r.Logger.Debug("diagnosis dedupe skip", "operation_id", op.ID)
 		return
@@ -377,7 +387,11 @@ func (r *Runner) run(ctx context.Context, op orailtypes.Operation, events []api.
 				"operation_id", op.ID,
 				"err", err,
 			)
+			return
 		} else {
+			failureCtx.WorkspaceID = resolved.WorkspaceID
+			failureCtx.ProjectID = resolved.ProjectID
+			failureCtx.EnvironmentID = resolved.EnvironmentID
 			failureCtx.ServiceID = resolved.ServiceID
 			failureCtx.ServiceSlug = resolved.ServiceSlug
 			failureCtx.DeploymentID = resolved.DeploymentID
@@ -410,7 +424,7 @@ func (r *Runner) run(ctx context.Context, op orailtypes.Operation, events []api.
 		System:         SystemPreamble,
 		AllowMutations: false,
 		Messages: []Message{
-			{Role: "user", Content: RenderUserMessage(failureCtx)},
+			{Role: "user", Content: redaction.DefaultRedactor().RedactString((build.Redactor{}).RedactText(RenderUserMessage(failureCtx)))},
 		},
 		Metadata: map[string]string{
 			"midnight.kind":         "diagnosis",
@@ -440,6 +454,15 @@ func (r *Runner) run(ctx context.Context, op orailtypes.Operation, events []api.
 	tags := map[string]string{
 		"midnight.kind":         "diagnosis",
 		"midnight.operation_id": string(op.ID),
+	}
+	for key, value := range map[string]string{
+		"midnight.workspace_id":   failureCtx.WorkspaceID,
+		"midnight.project_id":     failureCtx.ProjectID,
+		"midnight.environment_id": failureCtx.EnvironmentID,
+	} {
+		if value != "" {
+			tags[key] = value
+		}
 	}
 	if failureCtx.DeploymentID != "" {
 		tags["midnight.deployment_id"] = failureCtx.DeploymentID
@@ -483,6 +506,7 @@ func (r *Runner) run(ctx context.Context, op orailtypes.Operation, events []api.
 				"operation_id", op.ID,
 				"err", err,
 			)
+			return
 		}
 	}
 	r.Logger.Info("diagnosis attached",
@@ -493,9 +517,10 @@ func (r *Runner) run(ctx context.Context, op orailtypes.Operation, events []api.
 }
 
 // claim returns false when the operation has already been diagnosed by
-// this runner. The map is per-process; full cross-restart dedupe lives
-// in the operation metadata (diagnosis_id), which is checked again by
-// the dashboard before re-rendering the indicator.
+// this runner. The map covers in-flight work in this process. OnFailed also
+// checks the persisted attachment event supplied by the observed store on
+// replay. Simultaneous workers before the first attachment are not globally
+// serialized by this guard.
 func (r *Runner) claim(id orailtypes.ID) bool {
 	r.dedupeMu.Lock()
 	defer r.dedupeMu.Unlock()
