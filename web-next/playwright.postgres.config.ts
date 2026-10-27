@@ -3,6 +3,10 @@ import { randomUUID } from "node:crypto";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+// Playwright otherwise writes a failure-time accessibility tree containing
+// one-time credentials, even when tracing and screenshots are disabled.
+process.env.PLAYWRIGHT_NO_COPY_PROMPT = "1";
+
 process.env.MIDNIGHT_PG_E2E_STATE_PATH ||= resolve(
   dirname(fileURLToPath(import.meta.url)), "..", ".midnight", "browser-e2e", randomUUID(), "state.json",
 );
@@ -23,8 +27,10 @@ export default defineConfig({
     baseURL: "http://127.0.0.1:4183",
     actionTimeout: 15_000,
     serviceWorkers: "block",
-    trace: "retain-on-failure",
-    screenshot: "only-on-failure",
+    // This lane displays one-time invitation/token credentials and MFA secrets.
+    // Keep these out of persisted traces, DOM snapshots, and failure screenshots.
+    trace: "off",
+    screenshot: "off",
   },
   projects: [{ name: "postgres-chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: [{

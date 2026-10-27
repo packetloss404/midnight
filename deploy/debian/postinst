@@ -191,6 +191,13 @@ configure)
     chmod 0660 "$LOG_DIR/traefik/access.jsonl"
     install -d -m 0755 -o "$USER" -g "$GROUP" "$RUN_DIR"
     install -d -m 0755 -o root -g root "$ETC_DIR"
+    # Public checkpoint trust is operator-managed, separate from the worker's
+    # private signing state. Never import keys from an audit export here.
+    if [ -L "$ETC_DIR/audit-trusted-keys" ]; then
+        echo "midnight: audit trust directory must not be a symlink" >&2
+        exit 1
+    fi
+    install -d -m 0755 -o root -g root "$ETC_DIR/audit-trusted-keys"
 
     if [ ! -f "$ETC_DIR/midnight.env" ] && [ -f /usr/share/midnight/midnight.env.default ]; then
         install -m 0640 -o root -g "$GROUP" /usr/share/midnight/midnight.env.default "$ETC_DIR/midnight.env"

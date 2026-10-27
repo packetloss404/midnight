@@ -124,9 +124,53 @@ func (c *MemoryChain) ListCheckpoints(ctx context.Context) ([]Checkpoint, error)
 func (c *MemoryChain) InsertCheckpoint(ctx context.Context, cp Checkpoint) (Checkpoint, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Checkpoint{}, err
+	}
+	var previous Checkpoint
+	if len(c.checkpoints) > 0 {
+		previous = c.checkpoints[len(c.checkpoints)-1]
+	}
+	if err := validateCheckpointSuccessor(cp, previous); err != nil {
+		return Checkpoint{}, err
+	}
 	cp.ID = int64(len(c.checkpoints) + 1)
 	c.checkpoints = append(c.checkpoints, copyCheckpoint(cp))
 	return cp, nil
+}
+
+func (c *MemoryChain) SignAuditCheckpoint(ctx context.Context, key SigningKey, clock func() time.Time, daily bool) (Checkpoint, bool, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return Checkpoint{}, false, err
+	}
+	var previous Checkpoint
+	if len(c.checkpoints) > 0 {
+		previous = c.checkpoints[len(c.checkpoints)-1]
+	}
+	now := checkpointTime(clock())
+	if !checkpointDue(previous, now, daily) {
+		return copyCheckpoint(previous), false, nil
+	}
+	if len(c.rows) == 0 || c.rows[len(c.rows)-1].Sequence <= previous.LastRowID {
+		return Checkpoint{}, false, ErrEmptyChain
+	}
+	first := previous.LastRowID + 1
+	started := now
+	if previous.ID > 0 {
+		started = previous.EndedAt
+	}
+	head := c.rows[len(c.rows)-1]
+	cp, err := SignCheckpoint(Checkpoint{ID: int64(len(c.checkpoints) + 1), PartitionLabel: now.Format("2006-01"), StartedAt: started, EndedAt: now, FirstRowID: first, LastRowID: head.Sequence, LastRowHash: append([]byte(nil), head.RowHash...), PrevCheckpointID: previous.ID}, key)
+	if err != nil {
+		return Checkpoint{}, false, err
+	}
+	if err := validateCheckpointSuccessor(cp, previous); err != nil {
+		return Checkpoint{}, false, err
+	}
+	c.checkpoints = append(c.checkpoints, copyCheckpoint(cp))
+	return copyCheckpoint(cp), true, nil
 }
 
 // Tamper is a TEST-ONLY hook that overwrites a single row in place. It

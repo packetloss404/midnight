@@ -34,6 +34,9 @@ separately in `packetloss404/midnight-marketing`.
   [DNS reconciliation](networking/cloudflare-dns.md).
 - [Backup/restore](runbooks/backup-restore.md), [TLS failures](runbooks/domain-tls-failure.md),
   [alert triage](runbooks/alert-triage.md), and [support bundles](runbooks/support-bundle.md).
+- [Signed audit checkpoints](security/audit-checkpoints.md) for signing-key
+  persistence and explicit trust, and [remaining live acceptance](remaining-e2e-acceptance.md)
+  for credential setup, scoped execution, and retained proof boundaries.
 - [Authentication](security/auth-foundations.md), [untrusted builds](security/untrusted-builds.md),
   and [security reporting](../SECURITY.md).
 

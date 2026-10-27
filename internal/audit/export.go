@@ -126,14 +126,15 @@ func NewExporter(chain AuditChain) *Exporter { return &Exporter{chain: chain} }
 // writes a trailing manifest line. Returns the manifest summarizing the
 // run.
 func (e *Exporter) Export(ctx context.Context, dst Destination) (Manifest, error) {
-	rows, err := e.chain.Read(ctx, Query{})
+	snapshot, err := ReadSnapshot(ctx, e.chain)
 	if err != nil {
 		return Manifest{}, err
 	}
-	checkpoints, err := e.chain.ListCheckpoints(ctx)
-	if err != nil {
-		return Manifest{}, err
-	}
+	return ExportSnapshot(ctx, dst, snapshot)
+}
+
+func ExportSnapshot(ctx context.Context, dst Destination, snapshot Snapshot) (Manifest, error) {
+	rows, checkpoints := snapshot.Rows, snapshot.Checkpoints
 	wc, err := dst.Open(ctx)
 	if err != nil {
 		return Manifest{}, err
@@ -148,6 +149,10 @@ func (e *Exporter) Export(ctx context.Context, dst Destination) (Manifest, error
 	}
 
 	for i := range rows {
+		if err := ctx.Err(); err != nil {
+			_ = wc.Close()
+			return Manifest{}, err
+		}
 		row := rows[i]
 		rec := JSONLRecord{Kind: RecordKindRow, Row: &row}
 		buf, err := json.Marshal(rec)
@@ -166,6 +171,10 @@ func (e *Exporter) Export(ctx context.Context, dst Destination) (Manifest, error
 		manifest.RowCount++
 	}
 	for i := range checkpoints {
+		if err := ctx.Err(); err != nil {
+			_ = wc.Close()
+			return Manifest{}, err
+		}
 		cp := checkpoints[i]
 		rec := JSONLRecord{Kind: RecordKindCheckpoint, Checkpoint: &cp}
 		buf, err := json.Marshal(rec)
@@ -227,10 +236,15 @@ func NewJSONLSourceFromReader(r io.Reader) (*JSONLSource, error) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64*1024), 16*1024*1024)
 	src := &JSONLSource{}
+	streamHash := sha256.New()
+	seenManifest := false
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
+		}
+		if seenManifest {
+			return nil, fmt.Errorf("%w: records follow export manifest", ErrInvalidSource)
 		}
 		var rec JSONLRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
@@ -248,15 +262,38 @@ func NewJSONLSourceFromReader(r io.Reader) (*JSONLSource, error) {
 			}
 			src.checkpoints = append(src.checkpoints, *rec.Checkpoint)
 		case RecordKindManifest:
-			if rec.Manifest != nil {
-				src.manifest = *rec.Manifest
+			if rec.Manifest == nil {
+				return nil, fmt.Errorf("%w: manifest payload missing", ErrInvalidSource)
 			}
+			src.manifest = *rec.Manifest
+			seenManifest = true
 		default:
-			// Ignore unknown record kinds for forward compatibility.
+			return nil, fmt.Errorf("%w: unknown export record kind", ErrInvalidSource)
+		}
+		if !seenManifest {
+			_, _ = streamHash.Write(line)
+			_, _ = streamHash.Write([]byte("\n"))
 		}
 	}
 	if err := scanner.Err(); err != nil {
 		return nil, err
+	}
+	if !seenManifest {
+		return nil, fmt.Errorf("%w: export manifest missing", ErrInvalidSource)
+	}
+	m := src.manifest
+	if m.RowCount != int64(len(src.rows)) || m.CheckpointCount != int64(len(src.checkpoints)) || m.StreamSHA256 != hex.EncodeToString(streamHash.Sum(nil)) || m.GenesisHashHex != hex.EncodeToString(GenesisHash()) || m.CanonicalFormVersion != CanonicalFormVersion {
+		return nil, fmt.Errorf("%w: export manifest does not match stream", ErrInvalidSource)
+	}
+	var first, last int64
+	var fingerprint string
+	if len(src.checkpoints) > 0 {
+		first = src.checkpoints[0].ID
+		last = src.checkpoints[len(src.checkpoints)-1].ID
+		fingerprint = src.checkpoints[len(src.checkpoints)-1].SigningKeyFingerprint
+	}
+	if m.FromCheckpointID != first || m.ToCheckpointID != last || m.SigningKeyFingerprint != fingerprint {
+		return nil, fmt.Errorf("%w: export manifest checkpoint bounds differ", ErrInvalidSource)
 	}
 	return src, nil
 }

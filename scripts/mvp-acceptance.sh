@@ -27,7 +27,7 @@ Modes:
   package-template    Prove PostgreSQL provisioning, connectivity, and persistence.
   human-domain        Converge and prove one human-session generated HTTP domain.
   real-app            Check real app deploy, runtime inventory, route, and HTTPS.
-  audit               Check audit API/evidence and optional JSONL verification.
+  audit               Require nonempty, independently trusted signed audit evidence.
   backup              Check experimental backup manifest/restore-plan APIs only.
   local               Run local-smoke and surface-agreement.
   help                Show this help.
@@ -53,6 +53,11 @@ Create the service/environment and its managed public domain first. Human
 sessions use the existing generated HTTP domain; recovery credentials may
 select an existing generated or ownership-verified custom domain. Configure
 external DNS/HTTPS separately. MVP_APP_POLL_ATTEMPTS defaults to 90.
+
+audit requires configured server trust and at least one verified checkpoint.
+If audit-export.jsonl exists, also set MVP_AUDIT_PUBLIC_KEY or
+MVP_AUDIT_PUBLIC_KEY_DIR to independently pinned public keys for offline CLI
+verification. A valid unsigned hash chain alone cannot pass this mode.
 USAGE
 }
 
@@ -742,12 +747,28 @@ audit_check() {
   api_curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/audit/events?limit=20" | tee "$MVP_EVIDENCE_DIR/audit-events.json"
   api_curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/dashboard/audit-evidence" | tee "$MVP_EVIDENCE_DIR/audit-evidence.json"
   jq -e '.events | length >= 1' "$MVP_EVIDENCE_DIR/audit-events.json"
-  jq -e '.status == "ready" or .status == "pass" or .status == "verified"' "$MVP_EVIDENCE_DIR/audit-evidence.json"
+  jq -e '.status == "ready" and .event_count > 0 and .checkpoint_count > 0 and
+    .verification.valid == true and .verification.rows_checked == .event_count and
+    .verification.checkpoints_checked == .checkpoint_count and
+    (.verification.signature_status == "verified" or .verification.signature_status == "partial") and
+    .verification.signed_through_sequence > 0' "$MVP_EVIDENCE_DIR/audit-evidence.json"
   if [[ -s "$MVP_EVIDENCE_DIR/audit-export.jsonl" ]]; then
-    "$MIDNIGHT_CLI" audit verify --from-jsonl "$MVP_EVIDENCE_DIR/audit-export.jsonl" --json |
+    if [[ -z "${MVP_AUDIT_PUBLIC_KEY:-}" && -z "${MVP_AUDIT_PUBLIC_KEY_DIR:-}" ]]; then
+      echo 'audit: offline signature verification requires independently pinned public keys' >&2
+      exit 78
+    fi
+    local verify_args=(audit verify --from-jsonl "$MVP_EVIDENCE_DIR/audit-export.jsonl" --json)
+    if [[ -n "${MVP_AUDIT_PUBLIC_KEY:-}" ]]; then verify_args+=(--public-key "$MVP_AUDIT_PUBLIC_KEY"); fi
+    if [[ -n "${MVP_AUDIT_PUBLIC_KEY_DIR:-}" ]]; then verify_args+=(--public-key-dir "$MVP_AUDIT_PUBLIC_KEY_DIR"); fi
+    "$MIDNIGHT_CLI" "${verify_args[@]}" |
       tee "$MVP_EVIDENCE_DIR/audit-verify.json"
-    jq -e '.status == "verified" or .valid == true' "$MVP_EVIDENCE_DIR/audit-verify.json"
+    jq -e '.valid == true and .rows_checked > 0 and .checkpoints_checked > 0 and
+      (.signature_status == "verified" or .signature_status == "partial") and
+      .signed_through_sequence > 0' "$MVP_EVIDENCE_DIR/audit-verify.json"
   fi
+  jq '{signed_through_sequence: .verification.signed_through_sequence,
+    unsigned_rows: .verification.unsigned_rows, signature_status: .verification.signature_status}' \
+    "$MVP_EVIDENCE_DIR/audit-evidence.json"
   if grep -R -E 'postgres://[^[:space:]]+:[^*@[:space:]]+@|BEGIN (RSA|OPENSSH|EC) PRIVATE KEY|MIDNIGHT_.*SECRET=' "$MVP_EVIDENCE_DIR"; then
     echo "secret-like material found in evidence" >&2
     exit 1

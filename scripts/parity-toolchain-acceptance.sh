@@ -12,7 +12,7 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSIONS_FILE="$ROOT_DIR/versions.yaml"
 EVIDENCE_ROOT="${MIDNIGHT_PARITY_EVIDENCE_DIR:-$ROOT_DIR/.midnight/parity-evidence}"
-RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$-$RANDOM"
 EVIDENCE_DIR="$EVIDENCE_ROOT/toolchain/$RUN_ID"
 
 version_value() {
@@ -63,7 +63,7 @@ mkdir -p "$EVIDENCE_DIR"
 # plan/info/metadata proof into the host-owned evidence directory.
 chmod 0777 "$EVIDENCE_DIR"
 
-suffix="$$"
+suffix="$$-$(python3 -c 'import secrets; print(secrets.token_hex(12))')"
 network_name="midnight-toolchain-$suffix"
 registry_name="midnight-toolchain-registry-$suffix"
 buildkit_name="midnight-toolchain-buildkit-$suffix"
@@ -73,42 +73,99 @@ registry_port="$(
 )"
 active_app=""
 built_images=()
+app_ids=()
+registry_id=""
+buildkit_id=""
+network_id=""
+worker_image_owned=false
 
-cleanup() {
-  if [[ -n "$active_app" ]]; then
-    docker stop "$active_app" >/dev/null 2>&1 || true
+remove_container() {
+  local id="$1" remaining
+  [[ -n "$id" ]] || return 0
+  remaining=$(docker ps -aq --no-trunc --filter "id=$id") || return 1
+  if [[ -n "$remaining" ]]; then
+    docker rm -f "$id" >/dev/null || return 1
   fi
-  docker stop "$buildkit_name" "$registry_name" >/dev/null 2>&1 || true
-  docker network rm "$network_name" >/dev/null 2>&1 || true
-  if [[ "${#built_images[@]}" -gt 0 ]]; then
-    docker image rm "${built_images[@]}" >/dev/null 2>&1 || true
-  fi
-  docker image rm "$worker_image" >/dev/null 2>&1 || true
+  remaining=$(docker ps -aq --no-trunc --filter "id=$id") || return 1
+  [[ -z "$remaining" ]]
 }
-trap cleanup EXIT INT TERM
+remove_image_reference() {
+  local reference="$1" remaining
+  remaining=$(docker image ls -q --filter "reference=$reference") || return 1
+  if [[ -n "$remaining" ]]; then
+    # Remove only our unique tag, never force-remove a shared image ID.
+    docker image rm "$reference" >/dev/null || return 1
+  fi
+  remaining=$(docker image ls -q --filter "reference=$reference") || return 1
+  [[ -z "$remaining" ]]
+}
+cleanup_runtime() {
+  local cleanup_failed=0 id reference remaining
+  for id in "${app_ids[@]}" "$buildkit_id" "$registry_id"; do
+    remove_container "$id" || cleanup_failed=1
+  done
+  if [[ -n "$network_id" ]]; then
+    remaining=$(docker network ls -q --no-trunc --filter "id=$network_id") || cleanup_failed=1
+    if [[ -n "$remaining" ]]; then
+      docker network rm "$network_id" >/dev/null || cleanup_failed=1
+    fi
+    remaining=$(docker network ls -q --no-trunc --filter "id=$network_id") || cleanup_failed=1
+    [[ -z "$remaining" ]] || cleanup_failed=1
+  fi
+  for reference in "${built_images[@]}"; do
+    remove_image_reference "$reference" || cleanup_failed=1
+  done
+  if "$worker_image_owned"; then
+    remove_image_reference "$worker_image" || cleanup_failed=1
+  fi
+  return "$cleanup_failed"
+}
+on_exit() {
+  local toolchain_exit_status=$?
+  trap - EXIT
+  cleanup_runtime >/dev/null 2>&1 || true
+  exit "$toolchain_exit_status"
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 echo "==> Build production source-build worker"
+docker_arch=$(docker info --format '{{.Architecture}}')
+case "$docker_arch" in
+  amd64 | x86_64) target_arch=amd64 ;;
+  arm64 | aarch64) target_arch=arm64 ;;
+  *) echo 'toolchain acceptance: unsupported Docker architecture' >&2; exit 78 ;;
+esac
 docker build \
   --file "$ROOT_DIR/deploy/oci/build-worker/Dockerfile" \
   --tag "$worker_image" \
+  --build-arg "TARGETARCH=$target_arch" \
   --build-arg "BUILDKIT_VERSION=$BUILDKIT_VERSION" \
   --build-arg "RAILPACK_VERSION=$RAILPACK_VERSION" \
   "$ROOT_DIR"
+worker_image_owned=true
 
 echo "==> Start disposable registry and BuildKit"
-docker network create "$network_name" >/dev/null
-docker run -d --rm \
+network_options=()
+if [[ -n "${MIDNIGHT_PARITY_NETWORK_SUBNET:-}" ]]; then
+  # Dedicated shared runners may exhaust Docker's automatic address pools.
+  # Docker validates the explicit subnet and refuses existing-network overlap.
+  network_options+=(--subnet "$MIDNIGHT_PARITY_NETWORK_SUBNET")
+fi
+network_id=$(docker network create "${network_options[@]}" "$network_name")
+registry_id=$(docker run -d --rm \
   --name "$registry_name" \
   --network "$network_name" \
   --network-alias registry \
   -p "127.0.0.1:$registry_port:5000" \
-  "registry:${REGISTRY_VERSION#v}" >/dev/null
-docker run -d --rm --privileged \
+  "registry:${REGISTRY_VERSION#v}")
+buildkit_id=$(docker run -d --rm --privileged \
   --name "$buildkit_name" \
   --network "$network_name" \
   --network-alias buildkit \
   "moby/buildkit:${BUILDKIT_VERSION}-rootless" \
-  --addr tcp://0.0.0.0:1234 >/dev/null
+  --addr tcp://0.0.0.0:1234)
 
 for attempt in $(seq 1 30); do
   if docker run --rm \
@@ -178,7 +235,7 @@ PY
     --output "type=image,name=registry:5000/midnight/railpack-$sample:$image_tag,push=true,registry.insecure=true" \
     --metadata-file /evidence/buildctl.metadata.json
 
-  curl -fsS "http://127.0.0.1:$registry_port/v2/midnight/railpack-$sample/tags/list" >/dev/null
+  curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$registry_port/v2/midnight/railpack-$sample/tags/list" >/dev/null
   docker pull "$host_image" >/dev/null
   built_images+=("$host_image")
 
@@ -208,14 +265,14 @@ PY
   }
 
   echo "==> Run the emitted $sample image and probe real application endpoints"
-  docker run -d --rm \
+  app_ids+=("$(docker run -d --rm \
     --name "$active_app" \
     -p "127.0.0.1:$app_port:8080" \
-    "$host_image" >/dev/null
+    "$host_image")")
   local health_body=""
   local root_body=""
   for attempt in $(seq 1 30); do
-    if health_body="$(curl -fsS "http://127.0.0.1:$app_port/healthz" 2>/dev/null)"; then
+    if health_body="$(curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$app_port/healthz" 2>/dev/null)"; then
       break
     fi
     if [[ "$attempt" == "30" ]]; then
@@ -225,7 +282,7 @@ PY
     fi
     sleep 1
   done
-  root_body="$(curl -fsS "http://127.0.0.1:$app_port/")"
+  root_body="$(curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$app_port/")"
   [[ "$health_body" == '{"status":"ok"}' ]] || {
     echo "toolchain acceptance: $sample returned unexpected health response: $health_body" >&2
     exit 1
@@ -269,7 +326,7 @@ build_dockerfile_sample() {
     --output "type=image,name=registry:5000/midnight/dockerfile:$image_tag,push=true,registry.insecure=true" \
     --metadata-file /evidence/buildctl.metadata.json
 
-  curl -fsS "http://127.0.0.1:$registry_port/v2/midnight/dockerfile/tags/list" >/dev/null
+  curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$registry_port/v2/midnight/dockerfile/tags/list" >/dev/null
   docker pull "$host_image" >/dev/null
   built_images+=("$host_image")
   local metadata_digest
@@ -295,13 +352,13 @@ PY
   }
 
   echo "==> Run the emitted Dockerfile image and probe real endpoints"
-  docker run -d --rm \
+  app_ids+=("$(docker run -d --rm \
     --name "$active_app" \
     -p "127.0.0.1:$app_port:8080" \
-    "$host_image" >/dev/null
+    "$host_image")")
   local health_body=""
   for attempt in $(seq 1 30); do
-    if health_body="$(curl -fsS "http://127.0.0.1:$app_port/healthz" 2>/dev/null)"; then
+    if health_body="$(curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$app_port/healthz" 2>/dev/null)"; then
       break
     fi
     if [[ "$attempt" == "30" ]]; then
@@ -312,7 +369,7 @@ PY
     sleep 1
   done
   local root_body
-  root_body="$(curl -fsS "http://127.0.0.1:$app_port/")"
+  root_body="$(curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$app_port/")"
   [[ "$health_body" == '{"status":"ok"}' &&
     "$root_body" == "midnight dockerfile build proof" ]] || {
     echo "toolchain acceptance: Dockerfile endpoint response mismatch" >&2
@@ -423,16 +480,16 @@ PY
     exit 1
   fi
 
-  curl -fsS "http://127.0.0.1:$registry_port/v2/midnight/railpack-secret/tags/list" >/dev/null
+  curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$registry_port/v2/midnight/railpack-secret/tags/list" >/dev/null
   docker pull "$host_image" >/dev/null
   built_images+=("$host_image")
-  docker run -d --rm \
+  app_ids+=("$(docker run -d --rm \
     --name "$active_app" \
     -p "127.0.0.1:$app_port:8080" \
-    "$host_image" >/dev/null
+    "$host_image")")
   local root_body=""
   for attempt in $(seq 1 30); do
-    if root_body="$(curl -fsS "http://127.0.0.1:$app_port/" 2>/dev/null)"; then
+    if root_body="$(curl --connect-timeout 5 --max-time 15 -fsS "http://127.0.0.1:$app_port/" 2>/dev/null)"; then
       break
     fi
     if [[ "$attempt" == "30" ]]; then
@@ -462,6 +519,22 @@ build_railpack_secret_sample
 build_dockerfile_sample
 
 chmod 0750 "$EVIDENCE_DIR"
+cleanup_runtime || { echo 'toolchain acceptance: fixture cleanup could not be verified' >&2; exit 1; }
+python3 - "$EVIDENCE_DIR/evidence.json" "$RAILPACK_VERSION" "$RAILPACK_FRONTEND" "$BUILDKIT_VERSION" "$REGISTRY_VERSION" <<'PY'
+import json, pathlib, sys
+pathlib.Path(sys.argv[1]).write_text(json.dumps({
+    'schema': 'midnight.parity.toolchain.v1',
+    'status': 'passed',
+    'cleanup_verified': True,
+    'railpack_version': sys.argv[2],
+    'railpack_frontend': sys.argv[3],
+    'buildkit_version': sys.argv[4],
+    'registry_version': sys.argv[5],
+    'built_pushed_and_executed': ['node', 'python', 'go', 'railpack-secret', 'dockerfile'],
+    'secret_plaintext_absent_from_retained_artifacts': True,
+    'installed_midnight_deployment_proven': False,
+}, indent=2) + '\n')
+PY
 echo "toolchain acceptance: PASS"
 echo "  railpack=$RAILPACK_VERSION buildkit=$BUILDKIT_VERSION registry=$REGISTRY_VERSION traefik=$TRAEFIK_VERSION"
 echo "  samples=node,python,go,railpack-secret,dockerfile"

@@ -384,7 +384,7 @@ function InvitationScopeManager({
         }}
         onRevoke={async () => {
           if (!revokeTarget) return;
-          await revokeInvitation.mutateAsync(revokeTarget.id);
+          await revokeInvitation.mutateAsync({ invitationId: revokeTarget.id, expectedVersion: revokeTarget.resource_version });
           setRevokeTarget(null);
           revokeInvitation.reset();
         }}

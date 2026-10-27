@@ -49,6 +49,33 @@ func NewPostgresChain(pool *pg.Pool) *PostgresChain {
 	return &PostgresChain{Pool: pool, Now: func() time.Time { return time.Now().UTC() }}
 }
 
+// InitializeSigningKey serializes the no-history proof with every checkpoint
+// insert. A missing file must not be regenerated after another worker creates
+// signed history between a standalone history read and key publication.
+func (c *PostgresChain) InitializeSigningKey(ctx context.Context, path string) (SigningKey, error) {
+	if c == nil || c.Pool == nil {
+		return SigningKey{}, errors.New("audit.PostgresChain: pool not initialized")
+	}
+	var key SigningKey
+	err := c.Pool.WithTx(ctx, func(tx *pg.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", auditChainAdvisoryLockKey); err != nil {
+			return err
+		}
+		var history bool
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM audit_checkpoints)`).Scan(&history); err != nil {
+			return err
+		}
+		var err error
+		key, err = LoadOrCreateSigningKey(ctx, path, !history)
+		return err
+	})
+	if err != nil {
+		clear(key.Private)
+		return SigningKey{}, err
+	}
+	return key, nil
+}
+
 // SetClock overrides the default UTC clock used to stamp recorded_at
 // when callers do not pre-populate it. Tests use this to keep
 // timestamps deterministic.
@@ -194,13 +221,7 @@ func (c *PostgresChain) prepareRow(r Row) Row {
 	return r
 }
 
-// Read implements AuditChain.
-func (c *PostgresChain) Read(ctx context.Context, q Query) ([]Row, error) {
-	if c == nil || c.Pool == nil {
-		return nil, errors.New("audit.PostgresChain: pool not initialized")
-	}
-	args := []any{q.SinceID}
-	sql := `SELECT
+const auditRowsSelect = `SELECT
             id, prev_hash, row_hash, canonical_form_version,
             request_id, COALESCE(trace_id,''), occurred_at, recorded_at,
             COALESCE(actor_id,''), actor_type, COALESCE(auth_method,''), COALESCE(source_ip,''), COALESCE(user_agent,''),
@@ -208,9 +229,15 @@ func (c *PostgresChain) Read(ctx context.Context, q Query) ([]Row, error) {
             resource_kind, COALESCE(resource_id,''), action,
             before, after, COALESCE(reason_code,''), COALESCE(policy_decision,''), attrs,
             COALESCE(checkpoint_id, 0)
-         FROM audit_logs
-         WHERE id > $1
-         ORDER BY id ASC`
+		 FROM audit_logs`
+
+// Read implements AuditChain.
+func (c *PostgresChain) Read(ctx context.Context, q Query) ([]Row, error) {
+	if c == nil || c.Pool == nil {
+		return nil, errors.New("audit.PostgresChain: pool not initialized")
+	}
+	args := []any{q.SinceID}
+	sql := auditRowsSelect + ` WHERE id > $1 ORDER BY id ASC`
 	if q.Limit > 0 {
 		sql += fmt.Sprintf(" LIMIT %d", q.Limit)
 	}
@@ -315,12 +342,15 @@ func (c *PostgresChain) InsertCheckpoint(ctx context.Context, cp Checkpoint) (Ch
 		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", auditChainAdvisoryLockKey); err != nil {
 			return fmt.Errorf("acquire advisory lock: %w", err)
 		}
-		var maxID int64
-		err := tx.QueryRow(ctx, `SELECT COALESCE(MAX(id), 0) FROM audit_checkpoints`).Scan(&maxID)
-		if err != nil {
+		var previous Checkpoint
+		err := tx.QueryRow(ctx, `SELECT id,last_row_id FROM audit_checkpoints ORDER BY id DESC LIMIT 1`).Scan(&previous.ID, &previous.LastRowID)
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 			return fmt.Errorf("read checkpoint head: %w", err)
 		}
-		cp.ID = maxID + 1
+		if err := validateCheckpointSuccessor(cp, previous); err != nil {
+			return err
+		}
+		cp.ID = previous.ID + 1
 		var prevID any
 		if cp.PrevCheckpointID > 0 {
 			prevID = cp.PrevCheckpointID
@@ -352,6 +382,96 @@ func (c *PostgresChain) InsertCheckpoint(ctx context.Context, cp Checkpoint) (Ch
 		return Checkpoint{}, err
 	}
 	return inserted, nil
+}
+
+// SignAuditCheckpoint holds the append lock for every proof read and the insert.
+// READ COMMITTED deliberately takes its snapshot after the advisory lock wait.
+func (c *PostgresChain) SignAuditCheckpoint(ctx context.Context, key SigningKey, clock func() time.Time, daily bool) (Checkpoint, bool, error) {
+	if c == nil || c.Pool == nil {
+		return Checkpoint{}, false, errors.New("audit.PostgresChain: pool not initialized")
+	}
+	var result Checkpoint
+	var created bool
+	err := c.Pool.WithTx(ctx, func(tx *pg.Tx) error {
+		if _, err := tx.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", auditChainAdvisoryLockKey); err != nil {
+			return fmt.Errorf("audit checkpoint lock: %w", err)
+		}
+		previous, err := scanCheckpoint(tx.QueryRow(ctx, `SELECT id,COALESCE(partition_label,''),started_at,ended_at,first_row_id,last_row_id,last_row_hash,signature_alg,signing_key_fingerprint,signature,COALESCE(prev_checkpoint_id,0) FROM audit_checkpoints ORDER BY id DESC LIMIT 1`))
+		if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			return err
+		}
+		now := checkpointTime(clock())
+		if !checkpointDue(previous, now, daily) {
+			result = previous
+			return nil
+		}
+		var lastID int64
+		var lastHash []byte
+		if err := tx.QueryRow(ctx, `SELECT id,row_hash FROM audit_logs ORDER BY id DESC LIMIT 1`).Scan(&lastID, &lastHash); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return ErrEmptyChain
+			}
+			return err
+		}
+		if lastID <= previous.LastRowID {
+			return ErrEmptyChain
+		}
+		if len(lastHash) != 32 {
+			return errors.New("audit: checkpoint head hash is malformed")
+		}
+		started := now
+		if previous.ID > 0 {
+			started = previous.EndedAt
+		}
+		cp, err := SignCheckpoint(Checkpoint{ID: previous.ID + 1, PartitionLabel: now.Format("2006-01"), StartedAt: started, EndedAt: now, FirstRowID: previous.LastRowID + 1, LastRowID: lastID, LastRowHash: lastHash, PrevCheckpointID: previous.ID}, key)
+		if err != nil {
+			return err
+		}
+		if err := validateCheckpointSuccessor(cp, previous); err != nil {
+			return err
+		}
+		_, err = tx.Exec(ctx, `INSERT INTO audit_checkpoints(id,partition_label,started_at,ended_at,first_row_id,last_row_id,last_row_hash,signature_alg,signing_key_fingerprint,signature,prev_checkpoint_id)
+			VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,NULLIF($11::bigint,0))`, cp.ID, cp.PartitionLabel, cp.StartedAt, cp.EndedAt, cp.FirstRowID, cp.LastRowID, cp.LastRowHash, cp.SignatureAlg, cp.SigningKeyFingerprint, cp.Signature, cp.PrevCheckpointID)
+		if err != nil {
+			return fmt.Errorf("audit checkpoint insert: %w", err)
+		}
+		result, created = cp, true
+		return nil
+	})
+	return result, created, err
+}
+
+// Snapshot uses one MVCC snapshot without blocking audit appends. A checkpoint
+// committed after the row read cannot appear without its covered rows.
+func (c *PostgresChain) Snapshot(ctx context.Context) (Snapshot, error) {
+	if c == nil || c.Pool == nil {
+		return Snapshot{}, errors.New("audit.PostgresChain: pool not initialized")
+	}
+	var snapshot Snapshot
+	err := c.Pool.WithTxOpts(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly}, func(tx *pg.Tx) error {
+		rows, err := tx.Query(ctx, auditRowsSelect+` ORDER BY id ASC`)
+		if err != nil {
+			return err
+		}
+		snapshot.Rows, err = scanAuditRows(rows)
+		if err != nil {
+			return err
+		}
+		checkpoints, err := tx.Query(ctx, `SELECT id,COALESCE(partition_label,''),started_at,ended_at,first_row_id,last_row_id,last_row_hash,signature_alg,signing_key_fingerprint,signature,COALESCE(prev_checkpoint_id,0) FROM audit_checkpoints ORDER BY id ASC`)
+		if err != nil {
+			return err
+		}
+		defer checkpoints.Close()
+		for checkpoints.Next() {
+			cp, err := scanCheckpoint(checkpoints)
+			if err != nil {
+				return err
+			}
+			snapshot.Checkpoints = append(snapshot.Checkpoints, cp)
+		}
+		return checkpoints.Err()
+	})
+	return snapshot, err
 }
 
 // LatestCheckpoint implements AuditChain.

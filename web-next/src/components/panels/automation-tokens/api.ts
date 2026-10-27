@@ -150,17 +150,22 @@ export async function createProjectAutomationToken(
   return result;
 }
 
-export function revokeProjectAutomationToken(
+export async function revokeProjectAutomationToken(
   projectId: string,
   tokenId: string,
+  expectedVersion: number,
   idempotencyKey = mutationKey("project-token-revoke"),
 ): Promise<void> {
+  const path = `${projectTokenPath(projectId)}/${encodeURIComponent(tokenId)}`;
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    throw new Error("Reload automation token metadata before revoking it.");
+  }
   return apiFetch<void>(
-    `${projectTokenPath(projectId)}/${encodeURIComponent(tokenId)}`,
+    path,
     {
       auth: "human",
       method: "DELETE",
-      headers: { "Idempotency-Key": idempotencyKey },
+      headers: { "Idempotency-Key": idempotencyKey, "If-Match": `"${expectedVersion}"` },
     },
   );
 }
@@ -209,9 +214,9 @@ export function useCreateProjectAutomationToken(projectId: string) {
 
 export function useRevokeProjectAutomationToken(projectId: string) {
   const queryClient = useQueryClient();
-  return useMutation<void, Error, string>({
-    mutationFn: (tokenId) =>
-      revokeProjectAutomationToken(projectId, tokenId),
+  return useMutation<void, Error, { tokenId: string; expectedVersion: number }>({
+    mutationFn: ({ tokenId, expectedVersion }) =>
+      revokeProjectAutomationToken(projectId, tokenId, expectedVersion),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: projectAutomationTokenKeys.list(projectId),

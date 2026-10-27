@@ -245,6 +245,7 @@ services:
       MIDNIGHT_AUTOMATION_TOKEN_KEY_PATH: /run/midnight-secrets/automation-token.key
       MIDNIGHT_INVITATION_KEY_PATH: /run/midnight-secrets/invitation.key
       MIDNIGHT_VARIABLE_INTENT_KEY_PATH: /run/midnight-secrets/variable-intent.key
+      MIDNIGHT_AUDIT_TRUSTED_PUBLIC_KEY_DIR: /run/midnight-audit-trusted
       MIDNIGHT_UP_EXTRACTION_ROOT: /var/lib/midnight/uploads
       MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_QUOTA_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_QUOTA_BYTES:-5368709120}
       MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_BYTES: ${MIDNIGHT_SOURCE_ARTIFACT_WORKSPACE_INFLIGHT_BYTES:-209715200}
@@ -281,6 +282,7 @@ services:
       - midnight-api-go-build-cache:/var/cache/midnight/go-build
       - midnight-up-uploads:/var/lib/midnight/uploads
       - midnight-control-secrets:/run/midnight-secrets:ro
+      - midnight-audit-trusted:/run/midnight-audit-trusted:ro
       - midnight-traefik-logs:/var/log/midnight/traefik:ro
       - midnight-backup-data:/var/lib/midnight/backups:ro
     networks:
@@ -327,6 +329,8 @@ services:
       MIDNIGHT_WORKER_POLL_INTERVAL: ${MIDNIGHT_WORKER_POLL_INTERVAL:-1s}
       MIDNIGHT_WORKER_LEASE_TTL: ${MIDNIGHT_WORKER_LEASE_TTL:-2m}
       MIDNIGHT_WORKER_RECLAIM_INTERVAL: ${MIDNIGHT_WORKER_RECLAIM_INTERVAL:-30s}
+      MIDNIGHT_AUDIT_CHECKPOINT_ENABLED: "true"
+      MIDNIGHT_AUDIT_SIGNING_KEY_PATH: /var/lib/midnight/audit/signing-key.pem
       MIDNIGHT_KEK_PATH: /run/midnight-secrets/kek
       # Accept immutable sha256 references produced by this local registry plus
       # the exact digest-pinned official database images. Other external
@@ -367,6 +371,7 @@ services:
       - midnight-go-mod-cache:/go/pkg/mod
       - midnight-go-build-cache:/root/.cache/go-build
       - midnight-control-secrets:/run/midnight-secrets:ro
+      - midnight-audit-state:/var/lib/midnight/audit
       - midnight-backup-data:/var/lib/midnight/backups
       - type: bind
         source: ${MIDNIGHT_TRAEFIK_DYNAMIC:-.midnight/local/traefik/dynamic}
@@ -473,6 +478,8 @@ services:
 
 volumes:
   midnight-postgres-data:
+  midnight-audit-state:
+  midnight-audit-trusted:
   midnight-registry-data:
   midnight-buildkit-cache:
   midnight-buildctl-cache:

@@ -11115,6 +11115,12 @@ components:
           type: string
         drain_count:
           type: integer
+        checkpoint_count:
+          type: integer
+          minimum: 0
+          description: Number of checkpoints in the same snapshot as the inspected rows.
+        verification:
+          $ref: '#/components/schemas/AuditVerificationReport'
         drains:
           type: array
           items:
@@ -11122,6 +11128,57 @@ components:
         generated_at:
           type: string
           format: date-time
+    AuditVerificationReport:
+      type: object
+      description: Hash-chain validity and independently trusted checkpoint signature coverage are separate assertions.
+      required: [outcome, status, valid, rows_checked, checkpoints_checked, genesis_hash, signature_status, signed_through_sequence, unsigned_rows]
+      properties:
+        outcome:
+          type: string
+        status:
+          type: string
+        valid:
+          type: boolean
+        rows_checked:
+          type: integer
+          minimum: 0
+        checkpoints_checked:
+          type: integer
+          minimum: 0
+        genesis_hash:
+          type: string
+        signature_status:
+          type: string
+          description: Explicitly distinguishes unsigned, partial, verified, and failed signature evidence.
+        signed_through_sequence:
+          type: integer
+          format: int64
+          minimum: 0
+        unsigned_rows:
+          type: integer
+          minimum: 0
+        breaks:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditVerificationBreak'
+        warnings:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditVerificationBreak'
+    AuditVerificationBreak:
+      type: object
+      required: [kind, detail]
+      properties:
+        kind:
+          type: string
+        detail:
+          type: string
+        sequence:
+          type: integer
+          format: int64
+        checkpoint_id:
+          type: integer
+          format: int64
     BillingMeteringLimitsAbusePlanRequest:
       type: object
       required: [window_start, window_end, events, plan_assignments]

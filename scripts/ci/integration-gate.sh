@@ -62,6 +62,10 @@ required_tests=(
   'github.com/midnight/midnight/internal/db/pg TestActiveDeploymentRouteRefreshConvergesAddressesAndFencesPreparedPublication/stop-remove-other'
   'github.com/midnight/midnight/internal/backup TestS3DestinationAgainstMinIO'
   'github.com/midnight/midnight/internal/backup TestSealedCredentialEndToEndAgainstMinIO'
+  'github.com/midnight/midnight/internal/audit TestPostgresScheduledAuditCheckpointsSurviveRestartAndConcurrentWorkers'
+  'github.com/midnight/midnight/internal/audit TestPostgresAuditCheckpointLockWaitIsBounded'
+  'github.com/midnight/midnight/internal/audit TestPostgresAuditExportSnapshotDuringConcurrentCheckpointing'
+  'github.com/midnight/midnight/cmd/midnight-worker TestWorkerInstalledAuditCheckpointsPersistAndRefuseLostHistoryKey'
 )
 if [[ -n "${MIDNIGHT_IDENTITY_TEST_DSN:-}" ]]; then
   required_tests+=(

@@ -207,6 +207,9 @@ type DataStack struct {
 	// audit_logs / audit_checkpoints tables (see
 	// internal/audit/chain_pg.go).
 	AuditChain audit.AuditChain
+	// AuditVerifyingKeys is operator-configured trust; exported keys and
+	// worker distribution directories are never imported implicitly.
+	AuditVerifyingKeys audit.VerifyingKeyProvider
 
 	// WebhookEndpoints resolves the {endpoint_id} component of an
 	// inbound webhook URL into a per-endpoint signing key set. Lane 4
@@ -620,6 +623,7 @@ func buildRouterWithDataStackInventory(stack DataStack) (*http.ServeMux, http.Ha
 	hub := newOperationStreamHub()
 	operationStore := newPublishingOperationStore(stack.OperationStore, hub)
 	dashboardAuditSource := newAuditChainDashboardSource(stack.AuditChain)
+	dashboardAuditSource.keys = stack.AuditVerifyingKeys
 	registry := stack.AgentRegistry
 	if registry == nil {
 		if stack.AgentCredentials != nil {

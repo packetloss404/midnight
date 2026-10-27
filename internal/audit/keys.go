@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,7 +24,7 @@ var ErrSigningKeyMalformed = errors.New("audit: signing key file malformed")
 // installer.
 type SigningKey struct {
 	Public      ed25519.PublicKey
-	Private     ed25519.PrivateKey
+	Private     ed25519.PrivateKey `json:"-"`
 	Fingerprint string
 }
 
@@ -54,7 +55,7 @@ func GenerateSigningKey() (SigningKey, error) {
 }
 
 // EncodeSigningKeyPEM returns a PEM-encoded private key file. Format is
-// "MIDNIGHT AUDIT PRIVATE KEY" with the raw 64-byte Ed25519 seed (the
+// "MIDNIGHT AUDIT PRIVATE KEY" with the raw 64-byte Ed25519 private key (the
 // concatenation of the 32-byte seed + the 32-byte derived public key, as
 // produced by ed25519.NewKeyFromSeed).
 func EncodeSigningKeyPEM(k SigningKey) []byte {
@@ -77,8 +78,8 @@ func EncodeVerifyingKeyPEM(k SigningKey) []byte {
 
 // LoadSigningKeyPEM parses a PEM file produced by EncodeSigningKeyPEM.
 func LoadSigningKeyPEM(data []byte) (SigningKey, error) {
-	block, _ := pem.Decode(data)
-	if block == nil {
+	block, rest := pem.Decode(data)
+	if block == nil || len(bytes.TrimSpace(rest)) > 0 {
 		return SigningKey{}, ErrSigningKeyMalformed
 	}
 	if block.Type != "MIDNIGHT AUDIT PRIVATE KEY" {
@@ -88,14 +89,18 @@ func LoadSigningKeyPEM(data []byte) (SigningKey, error) {
 		return SigningKey{}, fmt.Errorf("%w: bytes=%d", ErrSigningKeyMalformed, l)
 	}
 	priv := ed25519.PrivateKey(block.Bytes)
+	derived := ed25519.NewKeyFromSeed(priv[:ed25519.SeedSize])
+	if !bytes.Equal(priv, derived) {
+		return SigningKey{}, ErrSigningKeyMalformed
+	}
 	pub := priv.Public().(ed25519.PublicKey)
 	return SigningKey{Public: pub, Private: priv, Fingerprint: FingerprintPublic(pub)}, nil
 }
 
 // LoadVerifyingKeyPEM parses a PEM file produced by EncodeVerifyingKeyPEM.
 func LoadVerifyingKeyPEM(data []byte) (VerifyingKey, error) {
-	block, _ := pem.Decode(data)
-	if block == nil {
+	block, rest := pem.Decode(data)
+	if block == nil || len(bytes.TrimSpace(rest)) > 0 {
 		return VerifyingKey{}, ErrSigningKeyMalformed
 	}
 	if block.Type != "MIDNIGHT AUDIT PUBLIC KEY" {
@@ -149,6 +154,11 @@ func CheckpointSigningInput(cp Checkpoint) ([]byte, error) {
 // and returns a Checkpoint with Signature + SigningKeyFingerprint
 // populated.
 func SignCheckpoint(cp Checkpoint, k SigningKey) (Checkpoint, error) {
+	if len(k.Private) != ed25519.PrivateKeySize || len(k.Public) != ed25519.PublicKeySize ||
+		!bytes.Equal(k.Private, ed25519.NewKeyFromSeed(k.Private[:ed25519.SeedSize])) ||
+		!bytes.Equal(k.Public, k.Private[ed25519.SeedSize:]) || k.Fingerprint != FingerprintPublic(k.Public) {
+		return Checkpoint{}, ErrSigningKeyMalformed
+	}
 	cp.SignatureAlg = "ed25519"
 	cp.SigningKeyFingerprint = k.Fingerprint
 	input, err := CheckpointSigningInput(cp)
@@ -163,6 +173,9 @@ func SignCheckpoint(cp Checkpoint, k SigningKey) (Checkpoint, error) {
 // VerifyingKey. Returns nil when the signature matches; ErrSignatureBad
 // otherwise.
 func VerifyCheckpoint(cp Checkpoint, key VerifyingKey) error {
+	if cp.SignatureAlg != "ed25519" || len(key.Public) != ed25519.PublicKeySize || key.Fingerprint != FingerprintPublic(key.Public) {
+		return ErrCheckpointSignatureBad
+	}
 	if cp.SigningKeyFingerprint != key.Fingerprint {
 		return ErrSigningKeyMissing
 	}

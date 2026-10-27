@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -23,6 +24,7 @@ import (
 	"github.com/midnight/midnight/internal/agent/tools"
 	"github.com/midnight/midnight/internal/api"
 	apimiddleware "github.com/midnight/midnight/internal/api/middleware"
+	"github.com/midnight/midnight/internal/audit"
 	"github.com/midnight/midnight/internal/auth"
 	"github.com/midnight/midnight/internal/automationtoken"
 	"github.com/midnight/midnight/internal/backup"
@@ -97,6 +99,7 @@ type serveConfig struct {
 	AutomationTokenKeyPath string
 	InvitationKeyPath      string
 	VariableIntentKeyPath  string
+	AuditKeyDir            string
 	AgentHMACSecret        string
 	AgentCredentialsFile   string
 	AgentAuthDevelopment   bool
@@ -215,6 +218,7 @@ func isServiceUpRequest(r *http.Request) bool {
 
 func parseServeConfig(args []string) (serveConfig, error) {
 	cfg := serveConfig{
+		AuditKeyDir:     envFirst("", "MIDNIGHT_AUDIT_TRUSTED_PUBLIC_KEY_DIR"), // not-a-failure-code
 		Listen:          envFirst(defaultListenAddr, "MIDNIGHT_SERVER_ADDR", "MIDNIGHT_LISTEN_ADDR"),
 		Storage:         envFirst(defaultStorageMode, "MIDNIGHT_STORAGE"),
 		PostgresDSN:     envFirst("", pg.EnvDSN, "MIDNIGHT_DATABASE_URL"),
@@ -258,6 +262,7 @@ func parseServeConfig(args []string) (serveConfig, error) {
 	}
 	cfg.SourceArtifactQuota = quotaConfig
 	fs := flag.NewFlagSet("midnight-server serve", flag.ContinueOnError)
+	fs.StringVar(&cfg.AuditKeyDir, "audit-trusted-public-key-dir", cfg.AuditKeyDir, "operator-pinned audit public PEM directory; never populated from exports automatically")
 	fs.StringVar(&cfg.Listen, "listen", cfg.Listen, "address to listen on")
 	fs.StringVar(&cfg.Storage, "storage", cfg.Storage, "storage backend: auto, memory, or postgres")
 	fs.BoolVar(
@@ -306,6 +311,9 @@ func parseServeConfig(args []string) (serveConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return serveConfig{}, err
 	}
+	if cfg.AuditKeyDir != "" && !filepath.IsAbs(cfg.AuditKeyDir) {
+		return serveConfig{}, errors.New("audit trusted public key directory must be absolute")
+	}
 	cfg.APIBearerToken = strings.TrimSpace(cfg.APIBearerToken)
 	if err := validateOperatorRecoveryConfig(cfg.APIBearerToken); err != nil {
 		return serveConfig{}, err
@@ -341,7 +349,7 @@ func buildServerHandler(ctx context.Context, cfg serveConfig) (http.Handler, fun
 		return nil, nil, "", err
 	}
 	if cfg.Storage == "memory" {
-		stack := api.DataStack{APIBearerToken: cfg.APIBearerToken, LogStore: logStore}
+		stack := api.DataStack{APIBearerToken: cfg.APIBearerToken, LogStore: logStore, AuditVerifyingKeys: audit.DirectoryKeyring{Path: cfg.AuditKeyDir}}
 		stack, err = configureAgentControlCredentials(stack, cfg, false)
 		if err != nil {
 			return nil, nil, "", err
@@ -375,7 +383,7 @@ func buildServerHandler(ctx context.Context, cfg serveConfig) (http.Handler, fun
 					pg.EnvDSN, pg.EnvDSNFile, cfg.PostgresDSNFile, envAllowMemoryFallback, err,
 				)
 			}
-			stack := api.DataStack{APIBearerToken: cfg.APIBearerToken, LogStore: logStore}
+			stack := api.DataStack{APIBearerToken: cfg.APIBearerToken, LogStore: logStore, AuditVerifyingKeys: audit.DirectoryKeyring{Path: cfg.AuditKeyDir}}
 			stack, err = configureAgentControlCredentials(stack, cfg, false)
 			if err != nil {
 				return nil, nil, "", err
@@ -472,6 +480,7 @@ func buildServerHandler(ctx context.Context, cfg serveConfig) (http.Handler, fun
 		return nil, nil, "", err
 	}
 	stack.APIBearerToken = cfg.APIBearerToken
+	stack.AuditVerifyingKeys = audit.DirectoryKeyring{Path: cfg.AuditKeyDir}
 	stack.ProductionAuthRequired = true
 	stack, err = configureAgentControlCredentials(stack, cfg, true)
 	if err != nil {
@@ -833,6 +842,11 @@ func newAgentCaller(provider string, registry *tools.Registry) (agent.Caller, er
 			Metrics:      metrics,
 		})
 	case providerMiniMax:
+		// The compatible adapter otherwise falls back to ANTHROPIC_API_KEY.
+		// A missing MiniMax credential must never send another provider's key.
+		if strings.TrimSpace(os.Getenv(envMiniMaxAPIKey)) == "" {
+			return nil, agent.AgentAPIKeyMissing
+		}
 		return claude.NewCaller(claude.Options{
 			APIKey:       os.Getenv(envMiniMaxAPIKey),
 			BaseURL:      envFirst(defaultMiniMaxBaseURL, envMiniMaxBaseURL),

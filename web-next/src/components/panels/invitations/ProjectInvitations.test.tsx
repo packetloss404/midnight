@@ -340,7 +340,7 @@ describe("ProjectInvitations", () => {
       within(dialog).getByRole("button", { name: "Revoke invitation" }),
     );
     await waitFor(() =>
-      expect(state.revoke.mutateAsync).toHaveBeenCalledWith("inv_active"),
+      expect(state.revoke.mutateAsync).toHaveBeenCalledWith({ invitationId: "inv_active", expectedVersion: 1 }),
     );
   });
 });

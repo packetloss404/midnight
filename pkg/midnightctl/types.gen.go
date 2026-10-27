@@ -4901,14 +4901,19 @@ type AuditEventPage struct {
 
 // AuditEvidence defines model for AuditEvidence.
 type AuditEvidence struct {
-	DrainCount    int                 `json:"drain_count"`
-	Drains        []AuditLogDrain     `json:"drains"`
-	EventCount    int                 `json:"event_count"`
-	FirstRowHash  *string             `json:"first_row_hash,omitempty"`
-	GeneratedAt   time.Time           `json:"generated_at"`
-	LastRowHash   *string             `json:"last_row_hash,omitempty"`
-	SchemaVersion string              `json:"schema_version"`
-	Status        AuditEvidenceStatus `json:"status"`
+	// CheckpointCount Number of checkpoints in the same snapshot as the inspected rows.
+	CheckpointCount *int                `json:"checkpoint_count,omitempty"`
+	DrainCount      int                 `json:"drain_count"`
+	Drains          []AuditLogDrain     `json:"drains"`
+	EventCount      int                 `json:"event_count"`
+	FirstRowHash    *string             `json:"first_row_hash,omitempty"`
+	GeneratedAt     time.Time           `json:"generated_at"`
+	LastRowHash     *string             `json:"last_row_hash,omitempty"`
+	SchemaVersion   string              `json:"schema_version"`
+	Status          AuditEvidenceStatus `json:"status"`
+
+	// Verification Hash-chain validity and independently trusted checkpoint signature coverage are separate assertions.
+	Verification *AuditVerificationReport `json:"verification,omitempty"`
 }
 
 // AuditEvidenceStatus defines model for AuditEvidence.Status.
@@ -4927,6 +4932,31 @@ type AuditLogDrain struct {
 
 // AuditLogDrainType defines model for AuditLogDrain.Type.
 type AuditLogDrainType string
+
+// AuditVerificationBreak defines model for AuditVerificationBreak.
+type AuditVerificationBreak struct {
+	CheckpointId *int64 `json:"checkpoint_id,omitempty"`
+	Detail       string `json:"detail"`
+	Kind         string `json:"kind"`
+	Sequence     *int64 `json:"sequence,omitempty"`
+}
+
+// AuditVerificationReport Hash-chain validity and independently trusted checkpoint signature coverage are separate assertions.
+type AuditVerificationReport struct {
+	Breaks             *[]AuditVerificationBreak `json:"breaks,omitempty"`
+	CheckpointsChecked int                       `json:"checkpoints_checked"`
+	GenesisHash        string                    `json:"genesis_hash"`
+	Outcome            string                    `json:"outcome"`
+	RowsChecked        int                       `json:"rows_checked"`
+
+	// SignatureStatus Explicitly distinguishes unsigned, partial, verified, and failed signature evidence.
+	SignatureStatus       string                    `json:"signature_status"`
+	SignedThroughSequence int64                     `json:"signed_through_sequence"`
+	Status                string                    `json:"status"`
+	UnsignedRows          int                       `json:"unsigned_rows"`
+	Valid                 bool                      `json:"valid"`
+	Warnings              *[]AuditVerificationBreak `json:"warnings,omitempty"`
+}
 
 // AuthBootstrapRequest defines model for AuthBootstrapRequest.
 type AuthBootstrapRequest struct {

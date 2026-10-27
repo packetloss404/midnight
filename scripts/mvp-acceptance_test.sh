@@ -28,6 +28,21 @@ for argument in "$@"; do
   esac
 done
 case "$url" in
+  */audit/events\?limit=20)
+    if [[ "${STUB_AUDIT_SCENARIO:-success}" == empty ]]; then printf '{"events":[]}\n'; else printf '{"events":[{"id":1}]}\n'; fi
+    ;;
+  */dashboard/audit-evidence)
+    status=ready valid=true signatures=verified rows=1 rows_checked=1 checked=1 checkpoints=1 signed=1 unsigned=0
+    case "${STUB_AUDIT_SCENARIO:-success}" in
+      unsigned) signatures=unsigned; checkpoints=0; checked=0; signed=0; unsigned=1 ;;
+      tampered) valid=false; signatures=failed ;;
+      untrusted) valid=false; signatures=failed; status=needs-review ;;
+      empty) status=empty; rows=0; rows_checked=0; checked=0; checkpoints=0; signed=0; signatures=unsigned ;;
+      partial) signatures=partial; rows=2; rows_checked=2; unsigned=1 ;;
+      mismatched_snapshot) rows=2 ;;
+    esac
+    printf '{"status":"%s","event_count":%s,"checkpoint_count":%s,"verification":{"valid":%s,"rows_checked":%s,"checkpoints_checked":%s,"signature_status":"%s","signed_through_sequence":%s,"unsigned_rows":%s}}\n' "$status" "$rows" "$checkpoints" "$valid" "$rows_checked" "$checked" "$signatures" "$signed" "$unsigned"
+    ;;
   */projects) printf '{"id":"prj_test"}\n' ;;
   */templates/postgres/instances)
     printf '{"template_slug":"postgres","state":"queued","provision_run_id":"tpr_test","operation_id":"op_test","deployment_id":"dep_test","created_services":[{"id":"svc_test"}],"created_volumes":[{"id":"vol_test"}],"status_url":"%s"}\n' "${STUB_STATUS_URL:-/api/v1alpha/templates/postgres/instances/tpr_test}"
@@ -176,4 +191,15 @@ unset STUB_APP_BODY
 export MVP_APP_POLL_ATTEMPTS=0
 if run_app_case; then fail "real-app zero poll budget passed"; fi
 [[ ! -s "$STUB_LOG" ]] || fail "invalid real-app budget requested API data"
+run_audit_case() {
+  bash "$ROOT_DIR/scripts/mvp-acceptance.sh" audit >"$scratch/output" 2>&1
+}
+export STUB_AUDIT_SCENARIO=success
+run_audit_case || { cat "$scratch/output" >&2; fail "trusted checkpoint audit was refused"; }
+export STUB_AUDIT_SCENARIO=partial
+run_audit_case || fail "explicit verified prefix plus disclosed unsigned tail was refused"
+for scenario in unsigned tampered untrusted empty mismatched_snapshot; do
+  export STUB_AUDIT_SCENARIO="$scenario"
+  if run_audit_case; then fail "$scenario audit evidence incorrectly passed"; fi
+done
 echo "mvp-acceptance contract test: PASS"

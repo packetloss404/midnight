@@ -56,6 +56,12 @@ commit-bound evidence.
   tokens, and recovery have handler/CLI/PostgreSQL coverage. The separate
   PostgreSQL browser lane covers actual enrollment, durable human sessions,
   sign-in, and sign-out; the default memory browser lane does not.
+  The expanded durable browser lane also exercises invitation acceptance and
+  role changes, project-scoped automation credential creation/replacement/
+  revocation, and administrator recovery with session revocation. Additional
+  ordinary identities are explicit disposable database fixtures; this is not
+  proof of a general account-registration product flow. Accepted deployment
+  intake is checked as queued durable work, without claiming worker execution.
 - **Image deployment and actions.** The real browser submits a digest-pinned
   image through `/graphql/v2`, requires a typed unavailable result in memory
   mode, and checks that canonical REST state has no invented deployment.
@@ -116,8 +122,12 @@ commit-bound evidence.
   registry publication contracts, and durable source intake. The live runtime
   gate requires a real minimal Dockerfile build and registry push twice,
   comparing image digests and the generated SBOM/provenance bytes. It does
-  not execute that image. A Railpack secret-mount test remains explicitly
-  opt-in through `MIDNIGHT_LIVE_*`.
+  not execute that image. The dedicated Railpack toolchain job uses the
+  production build-worker image and pinned frontend against Node, Python, Go,
+  secret-mount, and Dockerfile fixtures. It must build, push, pull, and execute
+  their identifying HTTP responses; retained artifacts must not contain the
+  secret plaintext. A helper remains opt-in through `MIDNIGHT_LIVE_*`, but a
+  skipped helper cannot satisfy the dedicated runner's image/HTTP assertions.
   A queued build or a mocked build runner does not prove a real Railpack or
   Dockerfile build, registry push, runtime activation, or BuildKit survival
   across a server restart (`MID-111`).
@@ -136,6 +146,12 @@ commit-bound evidence.
   pagination. `surface-agreement` checks real API projections using local
   test mutations. An installed export must be verified independently; an
   `empty` projection is not proof of a populated tamper-evident chain.
+  The worker's checkpoint scheduler, durable signing key, concurrent/restart
+  behavior, and consistent export have implementation and regression
+  coverage. Signature trust is configured independently of exports; unsigned
+  rows and untrusted keys remain visible in verification results. See
+  [signed checkpoints](security/audit-checkpoints.md). This source change does not
+  claim that an operator has pinned a key or produced an installed checkpoint.
 - **Secrets and variable lifecycle.** Vault/API/integration tests cover
   envelope encryption, AAD, versioning, sealed scopes, KEK rotation,
   redaction, and atomic mutation. The PostgreSQL browser lane covers a secret
@@ -195,6 +211,13 @@ commit-bound evidence.
   byte counts. `scripts/mvp-acceptance.sh backup` checks those manifests and
   restore plans only. It cannot replace the off-host
   copy/destruction/restore/application-readback drill (`MID-004`).
+  The dedicated offline recovery CLI job destroys a disposable PostgreSQL
+  database and temporary filesystem fixture, restores both through the real
+  recovery command, and reads their bytes back. It also checks wrong
+  passphrase/confirmation refusal, plaintext tamper refusal before mutation,
+  and completed-apply replay. The runner accepts a credential-free S3 URI via
+  `MIDNIGHT_PARITY_BACKUP_DESTINATION`; its default file destination does not
+  establish off-host storage or whole-host-loss survival.
 
 ## Reproduce the checks
 
@@ -208,6 +231,8 @@ npm --prefix web-next run test:gate0
 bash scripts/mvp-acceptance_test.sh
 bash scripts/ci/integration-gate.sh
 bash scripts/ci/live-runtime-gate.sh
+bash scripts/parity-toolchain-acceptance.sh
+bash scripts/parity-restore-acceptance.sh
 ```
 
 The default browser command owns its local API and Vite processes. It needs
@@ -241,3 +266,9 @@ For installed acceptance, run the specific modes in
 host-specific evidence in excluded local reports, not tracked documentation
 or public CI artifacts. Check hosted CI for the pushed commit before deploying
 that commit; a local gate cannot impersonate a hosted check.
+
+The credential-ready [remaining acceptance lanes](remaining-e2e-acceptance.md)
+provide private configuration, preflight, explicit execution, scoped cleanup,
+and failure receipts for product AI/diagnosis, GitHub, and native ACME staging.
+Missing credentials or preflight-only execution cannot produce a passing live
+receipt. The existence of a runner does not establish a successful external run.
