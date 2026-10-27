@@ -79,6 +79,16 @@ buildkit_id=""
 network_id=""
 worker_image_owned=false
 
+handoff_evidence() {
+  # Production writers keep artifacts private (0600). Give the invoking host
+  # user custody after the container exits, without making those bytes public.
+  # Do not follow any symlink out of this run's dedicated evidence directory.
+  docker run --rm --pull=never --network none --user 0:0 \
+    --entrypoint /bin/chown \
+    --mount "type=bind,source=$EVIDENCE_DIR,target=/evidence" \
+    "$worker_image" --recursive --no-dereference -- "$(id -u):$(id -g)" /evidence
+}
+
 remove_container() {
   local id="$1" remaining
   [[ -n "$id" ]] || return 0
@@ -130,6 +140,9 @@ on_exit() {
     if [[ -n "$buildkit_id" ]]; then
       docker logs "$buildkit_id" >"$EVIDENCE_DIR/buildkit.log" 2>&1 || true
       tail -n 40 "$EVIDENCE_DIR/buildkit.log" >&2 || true
+    fi
+    if "$worker_image_owned"; then
+      handoff_evidence >/dev/null 2>&1 || true
     fi
   fi
   cleanup_runtime >/dev/null 2>&1 || true
@@ -471,6 +484,7 @@ PY
     -test.v
   unset MIDNIGHT_LIVE_BUILD_SECRET
   rm -f "$sample_evidence/build-secret-live.test"
+  handoff_evidence
 
   if MIDNIGHT_SECRET_SCAN_VALUE="$secret_value" python3 - "$sample_evidence" <<'PY'
 import os
@@ -487,7 +501,7 @@ PY
   then
     :
   else
-    echo "toolchain acceptance: secret plaintext reached durable evidence" >&2
+    echo "toolchain acceptance: secret artifact scan failed" >&2
     exit 1
   fi
 
@@ -529,6 +543,7 @@ build_railpack_sample \
 build_railpack_secret_sample
 build_dockerfile_sample
 
+handoff_evidence
 chmod 0750 "$EVIDENCE_DIR"
 cleanup_runtime || { echo 'toolchain acceptance: fixture cleanup could not be verified' >&2; exit 1; }
 python3 - "$EVIDENCE_DIR/evidence.json" "$RAILPACK_VERSION" "$RAILPACK_FRONTEND" "$BUILDKIT_VERSION" "$REGISTRY_VERSION" <<'PY'
