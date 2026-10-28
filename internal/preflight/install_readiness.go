@@ -92,7 +92,7 @@ func CheckDatabaseDSNConfigured(source HostSource) Result {
 		return Result{Status: StatusPass, Message: "Postgres DSN is configured via environment"}
 	}
 	path := strings.TrimSpace(source.Paths.DatabaseDSN)
-	if path == "" {
+	if path == "" && !source.FixturePathsOnly {
 		path = strings.TrimSpace(values["MIDNIGHT_DB_DSN_FILE"])
 	}
 	if path == "" {
@@ -114,7 +114,7 @@ func CheckDatabaseDSNConfigured(source HostSource) Result {
 func CheckRouteConfigDirWritable(source HostSource) Result {
 	values, _ := PackageEnvValues(source)
 	root := strings.TrimSpace(source.Paths.RouteConfigDir)
-	if root == "" {
+	if root == "" && !source.FixturePathsOnly {
 		root = strings.TrimSpace(values["MIDNIGHT_WORKER_ROUTE_CONFIG_DIR"])
 	}
 	if root == "" {
@@ -235,6 +235,9 @@ func runtimeBinaryCandidates(source HostSource, values map[string]string) []runt
 			out = append(out, runtimeBinaryCandidate{role: fmt.Sprintf("runtime[%d]", i), path: binary})
 		}
 		return out
+	}
+	if source.FixturePathsOnly {
+		return nil
 	}
 	out := []runtimeBinaryCandidate{}
 	seenEnv := false

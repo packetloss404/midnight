@@ -113,6 +113,10 @@ type HostSource struct {
 	Paths    HostPaths
 	Commands HostCommands
 	Hints    HostHints
+	// FixturePathsOnly prevents captured package configuration from supplying
+	// additional filesystem paths. Explicit Paths and RuntimeBinaries hints
+	// remain usable; missing fixture inputs never borrow installed files.
+	FixturePathsOnly bool
 }
 
 // ReadMountInfo reads the configured mountinfo source.

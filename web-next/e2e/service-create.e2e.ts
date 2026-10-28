@@ -1,6 +1,33 @@
 import { expect, test } from "@playwright/test";
 import { openDeterministicConsole } from "./support/app";
 
+type RecordedAPIRequest = {
+  method: string;
+  path: string;
+  search: string;
+  authorization?: string;
+};
+
+function isScopedHumanConversationRead(
+  request: RecordedAPIRequest,
+  serviceIds: readonly string[],
+): boolean {
+  if (
+    request.method !== "GET" ||
+    request.path !== "/api/v1alpha/agent/conversations" ||
+    request.authorization !== "Bearer midn_user_member_e2e"
+  ) return false;
+  const params = new URLSearchParams(request.search);
+  return (
+    params.getAll("project_id").length === 1 &&
+    params.get("project_id") === "project_gate0" &&
+    [...params.keys()].every((key) => key === "project_id" || key === "service_id") &&
+    (params.getAll("service_id").length === 0 ||
+      (params.getAll("service_id").length === 1 &&
+        serviceIds.includes(params.get("service_id") ?? "")))
+  );
+}
+
 test("creates a tenant service and queues an immutable image without privileged fallback", async ({
   page,
 }) => {
@@ -191,7 +218,17 @@ test("creates a tenant service and queues an immutable image without privileged 
       request.path.startsWith("/api/v1alpha/") ||
       request.path === "/graphql/v2",
   );
+  const conversationReads = scopedRequests.filter((request) =>
+    request.path.includes("/agent/"),
+  );
+  expect(conversationReads.length).toBeGreaterThan(0);
+  expect(conversationReads.every((request) =>
+    isScopedHumanConversationRead(request, ["svc_created", "svc_api"]),
+  )).toBe(true);
   const unexpectedRequests = scopedRequests.filter((request) => {
+    if (request.path.includes("/agent/")) {
+      return !isScopedHumanConversationRead(request, ["svc_created", "svc_api"]);
+    }
     if (
       request.method === "POST" &&
       (request.path === "/api/v1alpha/services" ||
@@ -232,14 +269,20 @@ test("creates a tenant service and queues an immutable image without privileged 
 test("non-admin human routes expose tenant administration but keep fleet observability behind recovery", async ({
   page,
 }) => {
-  const requests: string[] = [];
+  const requests: RecordedAPIRequest[] = [];
   page.on("request", (request) => {
-    const pathname = new URL(request.url()).pathname;
+    const url = new URL(request.url());
+    const pathname = url.pathname;
     if (
       pathname.startsWith("/api/v1alpha/") ||
       pathname === "/graphql/v2"
     ) {
-      requests.push(pathname);
+      requests.push({
+        method: request.method(),
+        path: pathname,
+        search: url.search,
+        authorization: request.headers().authorization,
+      });
     }
   });
 
@@ -268,20 +311,29 @@ test("non-admin human routes expose tenant administration but keep fleet observa
   ).toBeVisible();
   await expect
     .poll(
-      () => requests.filter((path) => path.includes("/deployments")).length,
+      () => requests.filter((request) => request.path.includes("/deployments")).length,
     )
     .toBeGreaterThan(0);
 
+  const conversationReads = requests.filter((request) =>
+    request.path.includes("/agent/"),
+  );
+  expect(conversationReads.length).toBeGreaterThan(0);
+  expect(conversationReads.every((request) =>
+    isScopedHumanConversationRead(request, []),
+  )).toBe(true);
   expect(
     requests.filter(
-      (path) =>
-        path.includes("/dashboard/") ||
-        path.includes("/observability/") ||
-        path.includes("/variables") ||
-        path.includes("/github/") ||
-        path.includes("/agent/") ||
-        path.endsWith("/resources") ||
-        path === "/graphql/v2",
+      (request) =>
+        request.path.includes("/dashboard/") ||
+        request.path.includes("/observability/") ||
+        request.path.includes("/variables") ||
+        request.path.includes("/github/") ||
+        (request.path.includes("/agent/") &&
+          !isScopedHumanConversationRead(request, [])) ||
+        request.path.endsWith("/resources") ||
+        request.path === "/graphql/v2" ||
+        request.authorization === "Bearer operator-e2e",
     ),
   ).toEqual([]);
 });

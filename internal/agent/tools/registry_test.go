@@ -158,6 +158,10 @@ func (f *fakeBuilds) DeployFromSource(_ context.Context, sid, repo, ref string) 
 	f.called = true
 	return agent.Deployment{ID: "d-build-" + sid, ServiceID: sid, Status: "building", CommitSHA: ref}, nil
 }
+func (f *fakeBuilds) DeployScopedSource(_ context.Context, request agent.SourceDeployRequest) (agent.Deployment, error) {
+	f.called = true
+	return agent.Deployment{ID: "d-build-" + request.ServiceID, ServiceID: request.ServiceID, Status: "queued"}, nil
+}
 
 type fakeAudit struct {
 	mu      sync.Mutex
@@ -220,6 +224,7 @@ func TestDefaultRegistryRegistersAllTools(t *testing.T) {
 		"get_logs",
 		"get_metrics",
 		"get_service",
+		"get_source_deployment_context",
 		"list_projects",
 		"list_services",
 		"redeploy",
@@ -472,9 +477,7 @@ func TestRollback(t *testing.T) {
 func TestDeployFromSource(t *testing.T) {
 	r := NewDefaultRegistry()
 	env, _, _, bld, _ := newEnv(true)
-	_, err := r.Execute(context.Background(), "deploy_from_source", mustJSON(t, map[string]string{
-		"service_id": "s1", "repo": "midnight/x", "ref": "deadbeef",
-	}), env)
+	_, err := r.Execute(context.Background(), "deploy_from_source", mustJSON(t, agent.SourceDeployRequest{ServiceID: "s1", EnvironmentID: "e1", RequestKey: "build-1", ExpectedServiceVersion: 1, ExpectedEnvironmentVersion: 1, Files: map[string]string{"Dockerfile": "FROM scratch\n"}}), env)
 	if err != nil {
 		t.Fatal(err)
 	}

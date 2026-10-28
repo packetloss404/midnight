@@ -58,6 +58,8 @@ commit-bound evidence.
   PostgreSQL browser lane covers actual enrollment, durable human sessions,
   sign-in, and sign-out; the default memory browser lane does not.
   The expanded durable browser lane also exercises invitation acceptance and
+  new-account onboarding through the public invitation form (without seeding
+  those recipients), replay/revocation and existing-password protection, plus
   role changes, project-scoped automation credential creation/replacement/
   revocation, and administrator recovery with session revocation. Additional
   ordinary identities are explicit disposable database fixtures; this is not
@@ -94,7 +96,9 @@ commit-bound evidence.
 - **Embedded Claude and OpenAI-compatible agent.** `internal/agent/claude`,
   `openai`, `tools`, and API tests cover provider framing, tool-use loops,
   mutation gates, tenant authority, streams, and accounting with test
-  providers. AgentDock component/fixture tests cover rendering. No successful
+  providers. Real PostgreSQL browser journeys exercise tenant chat/tool access,
+  and AgentDock component tests cover scope changes and in-flight navigation.
+  No successful
   paid provider call or autonomous production mutation is established by the
   local browser lane.
 - **MCP server.** `internal/agent/mcp/server_test.go` covers JSON-RPC,
@@ -105,8 +109,12 @@ commit-bound evidence.
   canary exercises installed worker registration through a local HTTP provider
   adapter, canonical tenant context, redaction, persisted report/event linking,
   and replay refusal. A real worker failure followed by a real paid-provider
-  diagnosis is not implied by those tests. Chat/report API access requires an
-  installation administrator; ordinary tenant conversation RBAC is not supplied.
+  diagnosis is not implied by those tests. Tenant conversations now enforce
+  creator ownership within canonical project/service/environment scope, SQL
+  pagination visibility and live session/membership checks. Authorized log
+  readers can read canonical system reports, which remain immutable. The
+  PostgreSQL browser lane displays late-attached reports using the real API
+  and diagnosis producer with a controlled upstream model.
 - **ACME and HTTPS.** `internal/acme` tests cover durable order, budgets,
   diagnostics, provider contracts, and fail-closed route behavior. Live
   `TestLegoIssuerStagingIntegration` explicitly requires
@@ -183,6 +191,12 @@ commit-bound evidence.
   image intake through GraphQL and REST reads. OAuth is the operator
   compatibility surface; human login uses sessions. GraphQL subscriptions
   remain later work (`MID-203`).
+- **Live Doctor probes.** The CLI and optional live canary use the same bounded
+  cgroup/Docker command source. The live-runtime CI gate requires both actual
+  read probes to pass; skips fail that gate. This proves probe execution, not
+  full installed-host health. Other checks need installed files, captured
+  listener data or verified operator hints. Complete fixture bundles suppress
+  ambient host-path fallbacks and live commands.
 - **Node agent and observability.** Agent protocol/runtime/supervisor and
   telemetry tests cover desired state, probes, drift, redaction, and explicit
   coverage gaps. The live Traefik lane proves local routing and observed

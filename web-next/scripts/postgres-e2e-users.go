@@ -1,8 +1,8 @@
 //go:build ignore
 
-// This explicit fixture provisions existing local identities because Midnight's
-// only account-creation route is the one-shot first-administrator claim. It does
-// not enroll invitees, grant memberships, or replace any application API.
+// This fixture provisions existing local identities for existing-account
+// acceptance tests. New-user invitation enrollment has its own browser journey
+// through the public onboarding API. This helper grants no memberships.
 package main
 
 import (

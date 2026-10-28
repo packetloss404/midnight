@@ -35,21 +35,19 @@ var (
 
 	// ErrAgentMutationNeedsHumanSession is returned when the caller
 	// reached the agent with an operator recovery token or an MCP
-	// credential rather than a signed-in administrator session. The
+	// credential rather than an authorized signed-in human session. The
 	// durable tenant coordinators authorize against a live human
 	// session tuple, so there is no identity for the agent to act as.
 	ErrAgentMutationNeedsHumanSession = errors.New(
-		"this change requires a signed-in administrator session: the agent acts as the person talking to it, " +
+		"this change requires an authorized signed-in human session: the agent acts as the person talking to it, " +
 			"and this conversation is authenticated with an operator token instead. Ask the user to sign in, " +
 			"or make the change from the console or CLI.")
 
-	// ErrAgentSourceDeployUnavailable explains, specifically, why
-	// deploy_from_source has no honest implementation. See the comment
-	// on agentBuildsUnavailable.DeployFromSource.
+	// ErrAgentSourceDeployUnavailable refuses the legacy repo/ref interface
+	// or a stack without the bounded human-chat source coordinator.
 	ErrAgentSourceDeployUnavailable = errors.New(
-		"building and deploying from source is not available through the agent: the durable tenant deploy intake " +
-			"accepts pre-built images only, and GitHub-sourced builds are restricted to Midnight's signed-webhook " +
-			"source authority, which an agent cannot stand in for. Push the commit, or run `midnight up` from the CLI.")
+		"source deployment requires a scoped human conversation, bounded inline files, explicit target versions, and a configured source coordinator; " +
+			"the legacy repo/ref interface is unavailable. Push a linked GitHub commit, or use `midnight up` for CLI source deployment.")
 
 	// ErrAgentServiceHasNoDeployment is returned when redeploy is asked
 	// for a service that has never deployed anything worth replaying.
@@ -98,7 +96,7 @@ func buildAgentEnv(stack DataStack, actor string) agent.Env {
 			actor:         actor,
 		}
 	}
-	env.Builds = agentBuildsUnavailable{}
+	env.Builds = NewTenantAgentSourceBuilds(stack, actor)
 	if stack.AgentAuditSink != nil {
 		env.Audit = &agentAuditAdapter{sink: stack.AgentAuditSink}
 	}
@@ -108,7 +106,7 @@ func buildAgentEnv(stack DataStack, actor string) agent.Env {
 	return env
 }
 
-// humanIdentityFromContext pulls the signed-in administrator tuple the
+// humanIdentityFromContext pulls the authorized signed-in human tuple the
 // agent is acting on behalf of out of the request context. The chat and
 // MCP handlers run under optionalBearerTokenMiddleware, which installs
 // this tuple when the caller presented an identity session token; an
@@ -532,7 +530,7 @@ func (a *agentOperationsAdapter) Rollback(ctx context.Context, deploymentID stri
 // commitDeploymentAction routes one action to the same coordinator the
 // human HTTP route would pick for this caller: the tenant coordinator
 // (RBAC + audit + idempotency, authorized as the signed-in
-// administrator) when the conversation carries a human session, and the
+// human) when the conversation carries a human session, and the
 // durable action store directly when it carries an operator recovery
 // token. That fork mirrors deploymentActionHandler exactly, which is the
 // point — the agent is a second front door onto the same authority, not
@@ -547,7 +545,7 @@ func (a *agentOperationsAdapter) commitDeploymentAction(ctx context.Context, act
 		// A human session must go through the tenant coordinator, which
 		// evaluates that person's own capabilities. Falling back to the
 		// direct store here would quietly upgrade a signed-in
-		// administrator onto the operator-recovery write path, which
+		// human onto the operator-recovery write path, which
 		// runs no tenant RBAC — a divergence from the HTTP action route,
 		// which refuses in exactly this situation.
 		if a.tenantActions == nil {
@@ -616,6 +614,10 @@ func (a *agentOperationsAdapter) replaySource(ctx context.Context, serviceID str
 	}
 	var fallback string
 	for _, d := range deployments {
+		if bound, ok := ctx.Value(tenantConversationToolScopeKey{}).(*tenantConversationTools); ok &&
+			bound.environmentID != "" && d.EnvironmentID != bound.environmentID {
+			continue
+		}
 		id := firstNonEmptyString(d.DeploymentID, d.ID)
 		if id == "" {
 			continue
@@ -633,23 +635,9 @@ func (a *agentOperationsAdapter) replaySource(ctx context.Context, serviceID str
 	return fallback, nil
 }
 
-// agentBuildsUnavailable is the deliberate, documented gap in the tool
-// set. deploy_from_source has no honest implementation today, for two
-// independent reasons:
-//
-//   - The durable tenant deploy intake — the only source-deploy path
-//     that runs a human's RBAC, idempotency and audit — refuses source
-//     outright: it accepts immutable images only.
-//   - The generic source intake that does accept a git ref is an
-//     operator/automation HTTP route with no in-process coordinator
-//     seam, and it rejects GitHub App coordinates by design: those must
-//     come from Midnight's signed-webhook source authority, which an
-//     agent principal cannot stand in for.
-//
-// Faking a success here — enqueueing something that looks like a build
-// and reporting it as a deploy — would be worse than the gap. The tool
-// stays registered so the model can explain the limitation rather than
-// hallucinating a workaround.
+// agentBuildsUnavailable retains the legacy repo/ref interface for older
+// callers. Human chat source deployment uses the separately authorized bounded
+// inline-files interface; it never accepts host paths or arbitrary clone URLs.
 type agentBuildsUnavailable struct{}
 
 func (agentBuildsUnavailable) DeployFromSource(context.Context, string, string, string) (agent.Deployment, error) {
@@ -820,6 +808,7 @@ func agentDeploymentFromRecord(result DeploymentActionResult) agent.Deployment {
 // still be compared for "did the value change" without the value being
 // recoverable.
 var agentSecretArgumentFields = map[string]struct{}{
+	"files":         {},
 	"value":         {},
 	"secret":        {},
 	"token":         {},
@@ -848,6 +837,12 @@ func redactAgentToolInput(raw json.RawMessage) map[string]any {
 		if text, ok := value.(string); ok {
 			out[key] = "[redacted sha256:" + agentValueDigest(text)[:16] + "]"
 			continue
+		}
+		if strings.EqualFold(key, "files") {
+			if encoded, err := json.Marshal(value); err == nil {
+				out[key] = "[redacted sha256:" + agentValueDigest(string(encoded))[:16] + "]"
+				continue
+			}
 		}
 		out[key] = "[redacted]"
 	}

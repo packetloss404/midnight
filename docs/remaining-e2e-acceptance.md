@@ -40,13 +40,14 @@ For product lanes, use a real, short-lived human session belonging to an isolate
 QA account. The AI agent and diagnosis lanes specifically require a verified
 **installation administrator** human session and a dedicated disposable QA
 installation containing only the pinned QA resources. Current canonical
-conversation routes admit human installation administrators (or the emergency
-operator credential); ordinary tenant sessions receive 403. The runner never
-substitutes an operator credential. It checks `instance_admin=true` and performs
+conversation routes also support project-scoped ordinary human sessions. This
+external runner deliberately keeps its narrower administrator-only QA contract
+and never substitutes an operator credential. It checks `instance_admin=true` and performs
 a read-only canonical conversation collection request before any paid call or
 deployment intake. Administrator conversation visibility is installation-wide:
-production does not wire a tenant `ConversationScopeAuthorizer`. Ordinary tenant
-conversation RBAC and cross-tenant isolation remain explicitly unverified.
+the product now wires a tenant `ConversationScopeAuthorizer`. Local PostgreSQL
+and browser tests cover ordinary tenant ownership, scoped tools and revocation;
+this paid-provider runner does not repeat those role checks.
 
 The account must see exactly the pinned project, and the project must contain
 exactly the pinned service and environment. The runner verifies

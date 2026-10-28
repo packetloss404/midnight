@@ -4,6 +4,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   authStatus: "human",
   operatorFeaturesAvailable: false,
+  agentCollapsed: true,
+  collapseAgent: vi.fn(),
+  selectService: undefined as ((id: string) => void) | undefined,
   summaryOptions: [] as Array<{ enabled?: boolean }>,
   serviceOptions: [] as Array<{ enabled?: boolean }>,
   accessCalls: [] as Array<{
@@ -49,6 +52,10 @@ const state = vi.hoisted(() => ({
     onCreated?: (result: { serviceId?: string }) => void;
   }>,
   drawerProps: [] as Array<{
+    open?: boolean;
+    serviceId?: string;
+    projectId?: string;
+    environmentId?: string;
     installationAdminAuthorized?: boolean;
     installationAdminMutationAuthorized?: boolean;
     onSectionChange?: (section: string) => void;
@@ -173,11 +180,15 @@ vi.mock("@/components/ResourceGrid", () => ({
     resources,
     deploymentEvidenceAvailable,
     onViewLogs,
+    onSelectService,
   }: {
     resources: Array<{ service: { display_name: string } }>;
     deploymentEvidenceAvailable: boolean;
     onViewLogs?: unknown;
-  }) => (
+    onSelectService?: (id: string) => void;
+  }) => {
+    state.selectService = onSelectService;
+    return (
     <div
       data-testid="resource-grid"
       data-deployment-evidence={String(deploymentEvidenceAvailable)}
@@ -185,7 +196,7 @@ vi.mock("@/components/ResourceGrid", () => ({
     >
       {resources.map((resource) => resource.service.display_name).join(",")}
     </div>
-  ),
+  ); },
 }));
 
 vi.mock("@/components/Canvas", () => ({
@@ -230,7 +241,8 @@ vi.mock("@/components/StagedChangesBanner", () => ({
   StagedChangesBanner: () => <div data-testid="staged-changes-banner" />,
 }));
 vi.mock("@/components/AgentPanel/agent-dock-state", () => ({
-  setAgentDockCollapsed: vi.fn(),
+  setAgentDockCollapsed: state.collapseAgent,
+  useAgentDockCollapsed: () => state.agentCollapsed,
 }));
 
 import {
@@ -250,6 +262,8 @@ beforeEach(() => {
   __resetStagedChangesForTests();
   state.authStatus = "human";
   state.operatorFeaturesAvailable = false;
+  state.agentCollapsed = true;
+  state.selectService = undefined;
   state.summaryOptions = [];
   state.serviceOptions = [];
   state.accessCalls = [];
@@ -280,6 +294,31 @@ beforeEach(() => {
 });
 
 describe("ProjectCanvas authority-aware grid", () => {
+  it("keeps the selected service scope while chat hides and restores its inspector", () => {
+    const props = {projectId: "prj_1", environmentId: "env_1", serviceId: "svc_human"};
+    const { rerender } = render(<ProjectCanvas {...props} />);
+    expect(state.drawerProps.at(-1)).toMatchObject({...props, open: true});
+    window.dispatchEvent(new CustomEvent("midnight:utility-pane-open", {detail: "agent"}));
+    state.agentCollapsed = false;
+    rerender(<ProjectCanvas {...props} />);
+    expect(state.drawerProps.at(-1)).toMatchObject({...props, open: false});
+    expect(state.navigate).not.toHaveBeenCalled();
+    state.agentCollapsed = true;
+    rerender(<ProjectCanvas {...props} />);
+    expect(state.drawerProps.at(-1)).toMatchObject({...props, open: true});
+    expect(state.navigate).not.toHaveBeenCalled();
+  });
+
+  it("reopens the same selected service inspector when its resource is activated during chat", () => {
+    const props = {projectId: "prj_1", environmentId: "env_1", serviceId: "svc_human"};
+    const { rerender } = render(<ProjectCanvas {...props} />);
+    state.agentCollapsed = false;
+    rerender(<ProjectCanvas {...props} />);
+    state.collapseAgent.mockClear();
+    state.selectService?.("svc_human");
+    expect(state.collapseAgent).toHaveBeenCalledWith(true);
+    expect(state.navigate).toHaveBeenCalledWith(expect.objectContaining({params: {projectId: "prj_1", serviceId: "svc_human", section: "overview"}}));
+  });
   it("maps installation evidence and mutation panels to their canonical RBAC permissions", () => {
     expect(requiredServiceEvidencePermission("overview")).toBe("service.read");
     expect(requiredServiceEvidencePermission("logs")).toBe("logs.read");

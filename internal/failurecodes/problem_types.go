@@ -33,6 +33,7 @@ var apiProblemTypes = []ProblemType{
 	problem(AuthSessionInvalid, "Authentication session invalid", http.StatusUnauthorized, http.StatusUnauthorized),
 	problem(AuthorizationDenied, "Authorization denied", http.StatusForbidden, http.StatusForbidden),
 	problem(AuthRateLimited, "Authentication rate limited", http.StatusTooManyRequests, http.StatusTooManyRequests),
+	problem(InvitationAccountExists, "Invited account already exists", http.StatusConflict, http.StatusConflict),
 	problem(AuthOperatorRecoveryRequired, "Operator recovery credential required", http.StatusForbidden, http.StatusForbidden),
 	problem(RequestRateLimited, "Request rate limited", http.StatusTooManyRequests, http.StatusTooManyRequests),
 	problem(IdempotencyKeyInvalid, "Idempotency key invalid", http.StatusBadRequest, http.StatusBadRequest),

@@ -54,8 +54,8 @@ const DOCK_WIDTH = 440;
  *   - `pinned` and `collapsed` are stored in localStorage so the dock state
  *     survives reloads.
  *
- * Streams DO NOT abort on route changes — `useAgentStream` is owned by this
- * dock component, which is mounted once at the AppShell level.
+ * Changing project, service, or environment clears the selected conversation
+ * and closes its local stream so its scope is never relabeled as a new target.
  */
 export function AgentDock({ context, storageKeyPrefix = 'midnight.agent', modelName = 'Midnight agent' }: AgentDockProps) {
   // `collapsed` is owned by the shared module store (agent-dock-state.ts)
@@ -67,13 +67,26 @@ export function AgentDock({ context, storageKeyPrefix = 'midnight.agent', modelN
   // `pinned` now lives in the shared store so AppShell can reserve a docked
   // column when the panel is pinned (opt-in). Unpinned = floating overlay.
   const pinned = useAgentDockPinned();
-  const [currentId, setCurrentId] = useState<string | null>(() =>
-    readString(`${storageKeyPrefix}.currentId`),
-  );
+  const scope = JSON.stringify([context.projectId ?? null, context.serviceId ?? null, context.environmentId ?? null]);
+  const activeScope = useRef(scope);
+  activeScope.current = scope;
+  const previousScope = useRef(scope);
+  const [selection, setSelection] = useState(() => ({
+    scope,
+    id: readString(`${storageKeyPrefix}.currentScope`) === scope
+      ? readString(`${storageKeyPrefix}.currentId`) : null,
+  }));
+  const currentId = selection.scope === scope ? selection.id : null;
+  const setCurrentId = (id: string | null) => setSelection({ scope, id });
+  const [scopeChanged, setScopeChanged] = useState(false);
+  const [sendError, setSendError] = useState<unknown>(null);
   const [unread, setUnread] = useState(false);
 
   // Persist state.
-  useEffect(() => writeString(`${storageKeyPrefix}.currentId`, currentId), [currentId, storageKeyPrefix]);
+  useEffect(() => {
+    writeString(`${storageKeyPrefix}.currentId`, currentId);
+    writeString(`${storageKeyPrefix}.currentScope`, scope);
+  }, [currentId, storageKeyPrefix, scope]);
 
   const conversationsQ = useConversations({
     project_id: context.projectId ?? null,
@@ -83,6 +96,15 @@ export function AgentDock({ context, storageKeyPrefix = 'midnight.agent', modelN
   const createConvo = useCreateConversation();
   const postMsg = usePostMessage();
   const stream = useAgentStream();
+
+  useEffect(() => {
+    if (previousScope.current === scope) return;
+    previousScope.current = scope;
+    stream.cancel();
+    setSelection({ scope, id: null });
+    setScopeChanged(true);
+    setSendError(null);
+  }, [scope, stream.cancel]);
 
   // Clear unread when the dock is expanded.
   useEffect(() => {
@@ -100,12 +122,16 @@ export function AgentDock({ context, storageKeyPrefix = 'midnight.agent', modelN
   const handleNew = async () => {
     if (createConvo.isPending) return;
     stream.cancel();
+    setSendError(null);
     try {
       const c = await createConvo.mutateAsync({
         project_id: context.projectId ?? null,
         service_id: context.serviceId ?? null,
+        environment_id: context.environmentId ?? null,
         title: 'New conversation',
       });
+      if (activeScope.current !== scope) return;
+      setScopeChanged(false);
       setCurrentId(c.id);
     } catch {
       // The mutation error is rendered below.
@@ -125,14 +151,17 @@ export function AgentDock({ context, storageKeyPrefix = 'midnight.agent', modelN
     allow_mutations: boolean;
     allowed_tools: string[];
   }): Promise<boolean> => {
+    setSendError(null);
     try {
       let cid = currentId;
       if (!cid) {
         const c = await createConvo.mutateAsync({
           project_id: context.projectId ?? null,
           service_id: context.serviceId ?? null,
+          environment_id: context.environmentId ?? null,
           title: input.content.slice(0, 48),
         });
+        if (activeScope.current !== scope) return false;
         cid = c.id;
         setCurrentId(cid);
       }
@@ -141,19 +170,23 @@ export function AgentDock({ context, storageKeyPrefix = 'midnight.agent', modelN
       // POST resolves with the authoritative user/assistant messages, and its
       // onSuccess invalidation reconciles the cache with server truth.
       await stream.start(cid);
+      if (activeScope.current !== scope) return false;
       await postMsg.mutateAsync({ conversationId: cid, input });
+      setScopeChanged(false);
       return true;
-    } catch {
+    } catch (caught) {
       stream.cancel();
-      // Swallow: the failure is surfaced to the user via createConvo.isError /
-      // postMsg.isError (rendered below). Catching here also prevents an
-      // unhandled rejection from the onSend caller.
+      if (activeScope.current === scope) setSendError(caught);
+      // Keep the draft and readable failure, including a rejected SSE
+      // handshake that has no create/post mutation error of its own.
       return false;
     }
   };
 
   const messages = messagesQ.data ?? [];
-  const conversations = conversationsQ.data ?? [];
+  const conversations = (conversationsQ.data ?? []).filter(conversation =>
+    !context.environmentId || conversation.metadata?.['midnight.environment_id'] === context.environmentId,
+  );
 
   // Cost footer: prefer in-flight usage, else the last assistant message's usage.
   const usage = useMemo(() => {
@@ -219,17 +252,19 @@ export function AgentDock({ context, storageKeyPrefix = 'midnight.agent', modelN
       />
       <MessageList
         messages={messages}
-        streamingTurn={stream.turn}
-        isStreaming={stream.isStreaming}
+        streamingTurn={selection.scope === scope ? stream.turn : undefined}
+        isStreaming={selection.scope === scope && stream.isStreaming}
       />
-      {(createConvo.isError || postMsg.isError) && (
-        <AgentFailureNotice error={postMsg.error ?? createConvo.error} />
-      )}
+      {scopeChanged ? <p role="status" className="mx-3 text-xs text-muted">Project, service, or environment changed. Start a conversation for this context.</p> : null}
+      {(sendError || createConvo.isError || postMsg.isError) ? (
+        <AgentFailureNotice error={sendError ?? postMsg.error ?? createConvo.error} />
+      ) : null}
       <Composer
+        key={scope}
         isStreaming={stream.isStreaming}
         onSend={handleSend}
         onCancel={stream.cancel}
-        availableTools={[]}
+        availableTools={['list_projects', 'list_services', 'get_service', 'get_deployment', 'get_logs', 'get_metrics', 'get_source_deployment_context', 'set_variable', 'unset_variable', 'redeploy', 'rollback', 'deploy_from_source']}
         disabled={createConvo.isPending || postMsg.isPending}
       />
       <CostFooter usage={usage} />

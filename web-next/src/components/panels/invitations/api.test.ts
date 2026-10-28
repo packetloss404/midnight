@@ -9,6 +9,7 @@ import {
   fetchIdentityInvitations,
   reissueIdentityInvitation,
   revokeIdentityInvitation,
+  onboardIdentityInvitation,
 } from "./api";
 
 const projectInvitation = {
@@ -30,6 +31,18 @@ beforeEach(() => {
 });
 
 describe("identity invitation API", () => {
+  it("uses anonymous POST body for enrollment and returns no bearer credential", async () => {
+    const result = { user_id: "usr_new", email: projectInvitation.email, invitation: { ...projectInvitation, accepted_at: "2026-10-28T12:00:00Z", accepted_by_user_id: "usr_new" } };
+    apiFetch.mockResolvedValueOnce(result);
+    const input = { invitation_token: "midn_inv_private", display_name: "Invited person", password: "private password" };
+    await expect(onboardIdentityInvitation(input)).resolves.toEqual(result);
+    expect(apiFetch).toHaveBeenCalledWith("/invitations/onboard", { auth: "none", method: "POST", body: input });
+  });
+
+  it("refuses an enrollment response for an unaccepted or different account", async () => {
+    apiFetch.mockResolvedValueOnce({ user_id: "usr_other", email: projectInvitation.email, invitation: projectInvitation });
+    await expect(onboardIdentityInvitation({ invitation_token: "private", display_name: "Invitee", password: "private password" })).rejects.toThrow("invalid invitation enrollment");
+  });
   it("lists one encoded exact scope with human auth", async () => {
     const signal = new AbortController().signal;
     apiFetch.mockResolvedValueOnce({ items: [projectInvitation] });

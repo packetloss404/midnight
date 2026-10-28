@@ -7,6 +7,8 @@ for required in docker go jq python3 curl; do
   command -v "$required" >/dev/null || exit 2
 done
 docker info >/dev/null
+docker pull testcontainers/ryuk:0.14.0
+docker pull postgres:16-alpine
 mkdir -p artifacts/ci-live-runtime
 scratch=$(mktemp -d)
 suffix="$$-$RANDOM"
@@ -53,16 +55,19 @@ for _ in $(seq 1 60); do
 done
 "$ready" || { echo 'live runtime: BuildKit did not become ready' >&2; exit 1; }
 
-GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 2 -tags=integration -count=1 -timeout=10m -json \
-  -run '^(TestBuildctlIntegrationProducesDeterministicDigest|TestTraefikDynamicPublicationServesYAML)$' \
-  ./internal/build ./internal/router | tee artifacts/ci-live-runtime/results.jsonl
+MIDNIGHT_DOCTOR_LIVE=1 GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 1 -exec "$PWD/scripts/ci/integration-test-exec.sh" \
+  -tags=integration -count=1 -timeout=15m -json \
+  -run '^(TestBuildctlIntegrationProducesDeterministicDigest|TestTraefikDynamicPublicationServesYAML|TestTenantAgentSourceChatBuildKitRuntimeHTTP|TestLiveDoctorOnHost)$' \
+  ./internal/build ./internal/router ./cmd/midnight-buildkit ./internal/doctor | tee artifacts/ci-live-runtime/results.jsonl
 passed=$(jq -r 'select(.Action == "pass" and .Test != null) | .Package + " " + .Test' artifacts/ci-live-runtime/results.jsonl)
 for required_test in \
   'github.com/midnight/midnight/internal/build TestBuildctlIntegrationProducesDeterministicDigest' \
-  'github.com/midnight/midnight/internal/router TestTraefikDynamicPublicationServesYAML/LiveHTTP'; do
+  'github.com/midnight/midnight/internal/router TestTraefikDynamicPublicationServesYAML/LiveHTTP' \
+  'github.com/midnight/midnight/cmd/midnight-buildkit TestTenantAgentSourceChatBuildKitRuntimeHTTP' \
+  'github.com/midnight/midnight/internal/doctor TestLiveDoctorOnHost'; do
   grep -Fxq -- "$required_test" <<<"$passed" || {
     echo "live runtime: required test did not execute successfully: $required_test" >&2
     exit 1
   }
 done
-echo 'live runtime: PASS (real build/registry push and routed HTTP replacement)'
+echo 'live runtime: PASS (real build/registry push, routed HTTP replacement, tenant chat source build to Docker HTTP)'

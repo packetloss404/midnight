@@ -548,6 +548,67 @@ func TestAgentStreamSubscribesBeforeSuccessfulHeadersAreObservable(t *testing.T)
 	}
 }
 
+func TestAgentStreamEstablishesReadinessThroughBodyDrivenProxy(t *testing.T) {
+	store := conversation.NewMemoryStore(nil)
+	service, err := conversation.NewService(conversation.Config{Store: store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	conv, err := service.Start(context.Background(), conversation.StartInput{ActorID: "user:test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		streamConversation(w, r, AgentConversationHandlerDeps{Service: service, PrincipalFromRequest: func(*http.Request) string { return "user:test" }}, conv.ID)
+	}))
+	defer upstream.Close()
+	// Match proxies that write upstream headers but flush only after a body
+	// chunk. Header-only readiness stalls until the 15-second heartbeat.
+	proxy := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		request, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstream.URL, nil)
+		if err != nil {
+			http.Error(w, "proxy request failed", http.StatusBadGateway)
+			return
+		}
+		response, err := upstream.Client().Do(request)
+		if err != nil {
+			return
+		}
+		defer response.Body.Close()
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(response.StatusCode)
+		buffer := make([]byte, 4096)
+		for {
+			n, readErr := response.Body.Read(buffer)
+			if n > 0 {
+				if _, err := w.Write(buffer[:n]); err != nil {
+					return
+				}
+				w.(http.Flusher).Flush()
+			}
+			if readErr != nil {
+				return
+			}
+		}
+	}))
+	defer proxy.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, proxy.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := proxy.Client().Do(request)
+	if err != nil {
+		t.Fatalf("stream must become ready before a POST or heartbeat: %v", err)
+	}
+	defer response.Body.Close()
+	line, err := bufio.NewReader(response.Body).ReadString('\n')
+	if err != nil || response.StatusCode != http.StatusOK || line != ":connected\n" {
+		t.Fatalf("initial stream frame = %q, status=%d err=%v", line, response.StatusCode, err)
+	}
+}
+
 func TestAgentConversationSendCallerNotConfigured(t *testing.T) {
 	t.Parallel()
 	store := conversation.NewMemoryStore(nil)

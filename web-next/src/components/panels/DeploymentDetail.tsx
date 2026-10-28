@@ -29,6 +29,7 @@ import {
 } from "./deployments/api";
 import { useDeploymentMutationAuthority } from "./deployments/authority";
 import { RuntimeConsoleCapability } from "./RuntimeConsoleCapability";
+import { DeploymentDiagnosis } from "./diagnosis/DeploymentDiagnosis";
 
 export type DeploymentDetailProps = {
   deployment: DeploymentResource;
@@ -190,6 +191,8 @@ export function DeploymentDetail({ deployment, environmentId, onBack }: Deployme
         {d.failure_code ? <Meta label="Failure code" value={d.failure_code} tone="danger" mono /> : null}
         {d.failure_reason ? <Meta label="Failure reason" value={d.failure_reason} tone="danger" span /> : null}
       </dl>
+
+      <DeploymentDiagnosis deployment={d} />
 
       <div className="flex flex-col gap-2">
         <h3 className="m-0 text-[10px] font-semibold uppercase tracking-wider text-subtle">

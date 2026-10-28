@@ -67,6 +67,9 @@ required_tests=(
   'github.com/midnight/midnight/internal/audit TestPostgresAuditExportSnapshotDuringConcurrentCheckpointing'
   'github.com/midnight/midnight/cmd/midnight-worker TestWorkerInstalledAuditCheckpointsPersistAndRefuseLostHistoryKey'
   'github.com/midnight/midnight/cmd/midnight-worker TestWorkerDiagnosisPersistsScopedReportAndOperationAttachment'
+  'github.com/midnight/midnight/internal/api TestTenantConversationOwnershipRolesToolsAndRevocation'
+  'github.com/midnight/midnight/internal/api TestPostgresInvitationOnboardingAtomicPublicLifecycle'
+  'github.com/midnight/midnight/internal/api TestTenantAgentSourceCanonicalIntakeAuthorityReplayAndVersionFences'
 )
 if [[ -n "${MIDNIGHT_IDENTITY_TEST_DSN:-}" ]]; then
   required_tests+=(

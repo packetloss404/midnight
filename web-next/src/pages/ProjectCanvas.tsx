@@ -29,7 +29,7 @@ import { useProjectAccess } from "@/components/panels/automation-tokens/api";
 import { StagedChangesBanner } from "@/components/StagedChangesBanner";
 import { Loading, Empty, ErrorState, ActionButton } from "@/components/states";
 import { CapabilityBoundary } from "@/components/CapabilityBoundary";
-import { setAgentDockCollapsed } from "@/components/AgentPanel/agent-dock-state";
+import { setAgentDockCollapsed, useAgentDockCollapsed } from "@/components/AgentPanel/agent-dock-state";
 import {
   clearAllStagedChanges,
   stagedChangeKind,
@@ -62,6 +62,7 @@ export function ProjectCanvas({
 }: Props) {
   const navigate = useNavigate();
   const auth = useAuth();
+  const agentCollapsed = useAgentDockCollapsed();
   const mode = view === "map" ? "map" : "grid";
   const addingService = tab === "add-service" && !serviceId;
   const humanSession = auth.state.status === "human";
@@ -232,34 +233,18 @@ export function ProjectCanvas({
   useEffect(() => {
     if (!serviceId) return;
     setAgentDockCollapsed(true);
-    const closeForAgent = (event: Event) => {
-      if (event instanceof CustomEvent && event.detail === "agent") {
-        void navigate({
-          to: "/projects/$projectId",
-          params: { projectId },
-          search: {
-            env: environmentId,
-            view: mode === "map" ? "map" : undefined,
-          },
-          replace: true,
-        });
-      }
-    };
-    window.addEventListener("midnight:utility-pane-open", closeForAgent);
-    return () =>
-      window.removeEventListener(
-        "midnight:utility-pane-open",
-        closeForAgent,
-      );
-  }, [environmentId, mode, navigate, projectId, serviceId]);
+  }, [environmentId, projectId, serviceId]);
 
   const navigateToService = (
     id: string,
     nextSection: ServiceSection,
     next?: { deployment?: string; configure?: ConfigureSection },
     replace = false,
-  ) =>
-    navigate({
+  ) => {
+    // Explicit inspector activation must work even when its service URL is
+    // already selected behind the open chat pane.
+    setAgentDockCollapsed(true);
+    return navigate({
       to: "/projects/$projectId/services/$serviceId/$section",
       params: {
         projectId,
@@ -274,6 +259,7 @@ export function ProjectCanvas({
       },
       replace,
     } as never);
+  };
 
   const closeDrawer = () => navigateToResources(true);
   const selectService = (
@@ -357,7 +343,7 @@ export function ProjectCanvas({
   return (
     <div
       className="project-workspace flex w-full flex-col gap-3 p-[var(--main-gutter)]"
-      data-inspector-open={serviceId ? "true" : "false"}
+      data-inspector-open={serviceId && agentCollapsed ? "true" : "false"}
       style={{
         height: `calc(100dvh - var(--top-nav-height) - ${projectNavHeight})`,
       }}
@@ -553,7 +539,7 @@ export function ProjectCanvas({
           onSectionChange={setSection}
           onDeploymentChange={setDeployment}
           onConfigureSectionChange={setConfigureSection}
-          open={Boolean(serviceId)}
+          open={Boolean(serviceId) && agentCollapsed}
           onOpenChange={(open) => {
             if (!open) closeDrawer();
           }}

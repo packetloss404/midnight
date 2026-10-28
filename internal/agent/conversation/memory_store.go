@@ -94,7 +94,8 @@ func (s *MemoryStore) ListConversations(ctx context.Context, filter ListFilter) 
 		if filter.ServiceID != "" && c.ServiceID != filter.ServiceID {
 			continue
 		}
-		if filter.ActorID != "" && c.ActorID != filter.ActorID {
+		if filter.ActorID != "" && c.ActorID != filter.ActorID &&
+			!(filter.IncludeSystemDiagnosis && c.ActorID == "agent:diagnosis" && c.Metadata["midnight.kind"] == "diagnosis") {
 			continue
 		}
 		if filter.After != nil && (c.CreatedAt.After(filter.After.CreatedAt) ||

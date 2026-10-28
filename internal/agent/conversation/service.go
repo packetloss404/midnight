@@ -180,19 +180,41 @@ type StartInput struct {
 	Title          string
 	ProjectID      string
 	ServiceID      string
+	EnvironmentID  string
 	ActorID        string
 	Model          string
 	Metadata       map[string]any
 	SystemPreamble string
 }
 
+// AuthorizeStart also runs before an HTTP idempotency replay is returned.
+// Cached responses never substitute for current project/session authority.
+func (s *Service) AuthorizeStart(ctx context.Context, input StartInput) error {
+	if policy, ok := s.authorizer.(ScopePolicy); ok {
+		var err error
+		input, err = policy.PrepareStart(ctx, input)
+		if err != nil {
+			return wrapAuthErr(err)
+		}
+	}
+	return wrapAuthErr(s.authorizer.Authorize(ctx, Scope{ProjectID: input.ProjectID, ServiceID: input.ServiceID, EnvironmentID: input.EnvironmentID, ActorID: input.ActorID, Action: "create"}))
+}
+
 // Start creates a new conversation row.
 func (s *Service) Start(ctx context.Context, input StartInput) (Conversation, error) {
+	if policy, ok := s.authorizer.(ScopePolicy); ok {
+		var err error
+		input, err = policy.PrepareStart(ctx, input)
+		if err != nil {
+			return Conversation{}, wrapAuthErr(err)
+		}
+	}
 	scope := Scope{
-		ProjectID: input.ProjectID,
-		ServiceID: input.ServiceID,
-		ActorID:   input.ActorID,
-		Action:    "create",
+		ProjectID:     input.ProjectID,
+		ServiceID:     input.ServiceID,
+		EnvironmentID: input.EnvironmentID,
+		ActorID:       input.ActorID,
+		Action:        "create",
 	}
 	if err := s.authorizer.Authorize(ctx, scope); err != nil {
 		return Conversation{}, wrapAuthErr(err)
@@ -233,6 +255,13 @@ func (s *Service) Get(ctx context.Context, id, actorID string) (Conversation, er
 // List returns a page of conversations after filter-time
 // authorisation.
 func (s *Service) List(ctx context.Context, filter ListFilter, actorID string) (ListResult, error) {
+	if policy, ok := s.authorizer.(ScopePolicy); ok {
+		var err error
+		filter, err = policy.PrepareList(ctx, filter, actorID)
+		if err != nil {
+			return ListResult{}, wrapAuthErr(err)
+		}
+	}
 	scope := Scope{
 		ProjectID: filter.ProjectID,
 		ServiceID: filter.ServiceID,
@@ -242,7 +271,23 @@ func (s *Service) List(ctx context.Context, filter ListFilter, actorID string) (
 	if err := s.authorizer.Authorize(ctx, scope); err != nil {
 		return ListResult{}, wrapAuthErr(err)
 	}
-	return s.store.ListConversations(ctx, filter)
+	page, err := s.store.ListConversations(ctx, filter)
+	if err != nil {
+		return ListResult{}, err
+	}
+	if _, scoped := s.authorizer.(ScopePolicy); scoped {
+		visible := make([]Conversation, 0, len(page.Items))
+		for _, item := range page.Items {
+			if err := s.authorizer.Authorize(ctx, scopeFor(item, actorID, "read")); err == nil {
+				visible = append(visible, item)
+			}
+		}
+		page.Items = visible
+		if err := s.authorizer.Authorize(ctx, scope); err != nil {
+			return ListResult{}, wrapAuthErr(err)
+		}
+	}
+	return page, nil
 }
 
 // Delete removes a conversation.
@@ -314,15 +359,29 @@ type SendResult struct {
 // `stream`, when non-nil, receives the same events as the SSE
 // subscribers. Closing of stream is the caller's responsibility.
 func (s *Service) Send(ctx context.Context, input SendInput, stream chan<- agent.StreamEvent) (SendResult, error) {
-	if s.caller == nil {
-		return SendResult{}, ErrCallerNotConfigured
-	}
 	conv, err := s.store.GetConversation(ctx, input.ConversationID)
 	if err != nil {
 		return SendResult{}, err
 	}
 	if err := s.authorizer.Authorize(ctx, scopeFor(conv, input.ActorID, "send")); err != nil {
 		return SendResult{}, wrapAuthErr(err)
+	}
+	if s.caller == nil {
+		return SendResult{}, ErrCallerNotConfigured
+	}
+	env := s.env
+	env.AllowMutations = s.env.AllowMutations && input.AllowMutations
+	if strings.TrimSpace(input.ActorID) != "" {
+		env.Actor = strings.TrimSpace(firstNonEmpty(env.Actor, "agent:chat")) + ":" + strings.TrimSpace(input.ActorID)
+	}
+	if strings.TrimSpace(conv.ProjectID) != "" {
+		env.ProjectScope = conv.ProjectID
+	}
+	if policy, ok := s.authorizer.(ScopePolicy); ok {
+		env, err = policy.BindEnvironment(ctx, conv, input.ActorID, env)
+		if err != nil {
+			return SendResult{}, wrapAuthErr(err)
+		}
 	}
 
 	session := s.sessionContext(conv, input)
@@ -359,14 +418,6 @@ func (s *Service) Send(ctx context.Context, input SendInput, stream chan<- agent
 
 	systemPreamble, _ := conv.Metadata["system_preamble"].(string)
 
-	env := s.env
-	env.AllowMutations = s.env.AllowMutations && input.AllowMutations
-	if strings.TrimSpace(input.ActorID) != "" {
-		env.Actor = strings.TrimSpace(firstNonEmpty(env.Actor, "agent:chat")) + ":" + strings.TrimSpace(input.ActorID)
-	}
-	if strings.TrimSpace(conv.ProjectID) != "" {
-		env.ProjectScope = conv.ProjectID
-	}
 	req := agent.CallRequest{
 		Conversation:   callMessages,
 		SystemPreamble: systemPreamble,
@@ -380,8 +431,10 @@ func (s *Service) Send(ctx context.Context, input SendInput, stream chan<- agent
 
 	events := make(chan agent.StreamEvent, 32)
 	streamErr := make(chan error, 1)
+	callCtx, cancelCall := context.WithCancel(ctx)
+	defer cancelCall()
 	go func() {
-		streamErr <- s.caller.Stream(ctx, req, events)
+		streamErr <- s.caller.Stream(callCtx, req, events)
 	}()
 
 	var (
@@ -391,7 +444,27 @@ func (s *Service) Send(ctx context.Context, input SendInput, stream chan<- agent
 		finalMessage *agent.Message
 		stopReason   string
 	)
-	for ev := range events {
+	revalidate := time.NewTicker(time.Second)
+	defer revalidate.Stop()
+	for {
+		var ev agent.StreamEvent
+		var open bool
+		select {
+		case <-callCtx.Done():
+			return SendResult{UserMessage: storedUser}, callCtx.Err()
+		case <-revalidate.C:
+			if err := s.authorizer.Authorize(callCtx, scopeFor(conv, input.ActorID, "send")); err != nil {
+				return SendResult{UserMessage: storedUser}, wrapAuthErr(err)
+			}
+			continue
+		case ev, open = <-events:
+		}
+		if !open {
+			break
+		}
+		if err := s.authorizer.Authorize(callCtx, scopeFor(conv, input.ActorID, "send")); err != nil {
+			return SendResult{UserMessage: storedUser}, wrapAuthErr(err)
+		}
 		switch ev.Kind {
 		case agent.EventTextDelta:
 			textBuf.WriteString(ev.Delta)
@@ -622,10 +695,12 @@ func buildAssistantContent(final *agent.Message, text string, tools []agent.Cont
 }
 
 func scopeFor(c Conversation, actorID, action string) Scope {
+	environmentID, _ := c.Metadata["midnight.environment_id"].(string)
 	return Scope{
 		ConversationID: c.ID,
 		ProjectID:      c.ProjectID,
 		ServiceID:      c.ServiceID,
+		EnvironmentID:  environmentID,
 		ActorID:        actorID,
 		Action:         action,
 	}
@@ -635,7 +710,7 @@ func wrapAuthErr(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrUnauthorized) {
+	if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrNotFound) {
 		return err
 	}
 	return fmt.Errorf("%w: %s", ErrUnauthorized, err.Error())

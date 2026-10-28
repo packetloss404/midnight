@@ -82,7 +82,7 @@ test("uses the seeded real API for mobile grid, map, and inspector flows", async
     page.getByRole("complementary", { name: serviceName }),
   ).toHaveCSS("opacity", "1");
   await expect(
-    page.getByRole("heading", { name: "No deployment recorded" }),
+    page.getByRole("heading", { name: "No active release", exact: true }),
   ).toBeVisible();
   if (evidenceDir) {
     await page.waitForTimeout(250);

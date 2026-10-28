@@ -147,6 +147,7 @@ type startConversationRequest struct {
 	Title          string         `json:"title,omitempty"`
 	ProjectID      string         `json:"project_id,omitempty"`
 	ServiceID      string         `json:"service_id,omitempty"`
+	EnvironmentID  string         `json:"environment_id,omitempty"`
 	Model          string         `json:"model,omitempty"`
 	Metadata       map[string]any `json:"metadata,omitempty"`
 	SystemPreamble string         `json:"system_preamble,omitempty"`
@@ -157,29 +158,34 @@ func createConversation(w http.ResponseWriter, r *http.Request, deps AgentConver
 	if !ok {
 		return
 	}
-	ref, replayed := agentReserveIdempotency(w, r, deps.IdempotencyStore, body)
-	if replayed {
-		return
-	}
-
 	var request startConversationRequest
 	if len(body) > 0 {
 		if err := strictJSONDecode(body, &request); err != nil {
-			agentTerminalError(w, r, deps.IdempotencyStore, ref, http.StatusBadRequest, failurecodes.ResourceValidationFailed, "invalid conversation request body", map[string]any{"reason": err.Error()})
+			writeRequestError(w, r, http.StatusBadRequest, failurecodes.ResourceValidationFailed, "invalid conversation request body", map[string]any{"reason": err.Error()})
 			return
 		}
 	}
 
 	actor := deps.principal(r)
-	conv, err := deps.Service.Start(r.Context(), conversation.StartInput{
+	input := conversation.StartInput{
 		Title:          request.Title,
 		ProjectID:      request.ProjectID,
 		ServiceID:      request.ServiceID,
+		EnvironmentID:  request.EnvironmentID,
 		Model:          request.Model,
 		ActorID:        actor,
 		Metadata:       request.Metadata,
 		SystemPreamble: request.SystemPreamble,
-	})
+	}
+	if err := deps.Service.AuthorizeStart(r.Context(), input); err != nil {
+		writeRequestError(w, r, http.StatusForbidden, failurecodes.AuthorizationDenied, "principal is not authorised for this scope", nil)
+		return
+	}
+	ref, replayed := agentReserveIdempotency(w, r, deps.IdempotencyStore, body)
+	if replayed {
+		return
+	}
+	conv, err := deps.Service.Start(r.Context(), input)
 	if errors.Is(err, conversation.ErrUnauthorized) {
 		agentTerminalError(w, r, deps.IdempotencyStore, ref, http.StatusForbidden, failurecodes.AuthRequiredMissing, "principal is not authorised for this scope", nil)
 		return
@@ -329,6 +335,10 @@ func getConversation(w http.ResponseWriter, r *http.Request, deps AgentConversat
 
 func deleteConversation(w http.ResponseWriter, r *http.Request, deps AgentConversationHandlerDeps, id string) {
 	if err := deps.Service.Delete(r.Context(), id, deps.principal(r)); err != nil {
+		if errors.Is(err, conversation.ErrNotFound) {
+			writeRequestError(w, r, http.StatusNotFound, failurecodes.ResourceNotFound, "agent conversation not found", map[string]any{"conversation_id": id})
+			return
+		}
 		if errors.Is(err, conversation.ErrUnauthorized) {
 			writeRequestError(w, r, http.StatusForbidden, failurecodes.AuthRequiredMissing, "principal is not authorised for this scope", nil)
 			return
@@ -529,23 +539,45 @@ func streamConversation(w http.ResponseWriter, r *http.Request, deps AgentConver
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	// Some streaming proxies forward response headers only when the first
+	// body chunk arrives. Establish readiness immediately, after subscription,
+	// so clients can POST without waiting for the periodic heartbeat.
+	if _, err := io.WriteString(w, ":connected\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
+	revalidate := time.NewTicker(time.Second)
+	defer revalidate.Stop()
+	stillAuthorized := func() bool {
+		_, err := deps.Service.Get(r.Context(), id, deps.principal(r))
+		return err == nil
+	}
 
 	ctx := r.Context()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-revalidate.C:
+			if !stillAuthorized() {
+				return
+			}
 		case <-heartbeat.C:
+			if !stillAuthorized() {
+				return
+			}
 			if _, err := io.WriteString(w, ":heartbeat\n\n"); err != nil {
 				return
 			}
 			flusher.Flush()
 		case ev, ok := <-events:
 			if !ok {
+				return
+			}
+			if !stillAuthorized() {
 				return
 			}
 			if err := writeSSEEvent(w, ev); err != nil {

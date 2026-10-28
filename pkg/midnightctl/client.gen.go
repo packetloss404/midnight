@@ -16,6 +16,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/oapi-codegen/runtime"
+	openapi_types "github.com/oapi-codegen/runtime/types"
 )
 
 // RequestEditorFn is the function signature for the RequestEditor callback function
@@ -139,9 +140,9 @@ type ClientInterface interface {
 	// Corresponds with GET /_demo/schema-evidence (the `GetDemoSchemaEvidence` operationId).
 	GetDemoSchemaEvidence(ctx context.Context, reqEditors ...RequestEditorFn) (*http.Response, error)
 
-	// ListAgentConversations List AI-agent conversations visible to the authenticated operator.
+	// ListAgentConversations List AI-agent conversations visible to the authenticated principal.
 	//
-	// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor.
+	// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor. Ordinary users must select an authorized project. Their chats are private to the creator; authorized log readers may also read canonical system diagnosis reports. Access and environment restrictions are checked on every request, before pagination.
 	//
 	// Corresponds with GET /agent/conversations (the `ListAgentConversations` operationId).
 	ListAgentConversations(ctx context.Context, params *ListAgentConversationsParams, reqEditors ...RequestEditorFn) (*http.Response, error)
@@ -919,6 +920,24 @@ type ClientInterface interface {
 	//
 	// Corresponds with POST /invitations/accept (the `AcceptIdentityInvitation` operationId).
 	AcceptIdentityInvitation(ctx context.Context, params *AcceptIdentityInvitationParams, body AcceptIdentityInvitationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// OnboardIdentityInvitationWithBody Create an invited account and accept its invitation atomically.
+	//
+	// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+	//
+	// Takes any type of body and a specified content type.
+	//
+	// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+	OnboardIdentityInvitationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error)
+
+	// OnboardIdentityInvitation Create an invited account and accept its invitation atomically.
+	//
+	// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+	//
+	// Takes a body of the `application/json` content type.
+	//
+	// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+	OnboardIdentityInvitation(ctx context.Context, body OnboardIdentityInvitationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error)
 
 	// RevokeIdentityInvitation Revoke an invitation in one exact scope.
 	//
@@ -2258,9 +2277,9 @@ func (c *Client) GetDemoSchemaEvidence(ctx context.Context, reqEditors ...Reques
 	return c.Client.Do(req)
 }
 
-// ListAgentConversations List AI-agent conversations visible to the authenticated operator.
+// ListAgentConversations List AI-agent conversations visible to the authenticated principal.
 //
-// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor.
+// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor. Ordinary users must select an authorized project. Their chats are private to the creator; authorized log readers may also read canonical system diagnosis reports. Access and environment restrictions are checked on every request, before pagination.
 //
 // Corresponds with GET /agent/conversations (the `ListAgentConversations` operationId).
 func (c *Client) ListAgentConversations(ctx context.Context, params *ListAgentConversationsParams, reqEditors ...RequestEditorFn) (*http.Response, error) {
@@ -4079,6 +4098,44 @@ func (c *Client) AcceptIdentityInvitationWithBody(ctx context.Context, params *A
 // Corresponds with POST /invitations/accept (the `AcceptIdentityInvitation` operationId).
 func (c *Client) AcceptIdentityInvitation(ctx context.Context, params *AcceptIdentityInvitationParams, body AcceptIdentityInvitationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
 	req, err := NewAcceptIdentityInvitationRequest(c.Server, params, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// OnboardIdentityInvitationWithBody Create an invited account and accept its invitation atomically.
+//
+// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+//
+// Takes any type of body and a specified content type.
+//
+// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+func (c *Client) OnboardIdentityInvitationWithBody(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewOnboardIdentityInvitationRequestWithBody(c.Server, contentType, body)
+	if err != nil {
+		return nil, err
+	}
+	req = req.WithContext(ctx)
+	if err := c.applyEditors(ctx, req, reqEditors); err != nil {
+		return nil, err
+	}
+	return c.Client.Do(req)
+}
+
+// OnboardIdentityInvitation Create an invited account and accept its invitation atomically.
+//
+// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+//
+// Takes a body of the `application/json` content type.
+//
+// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+func (c *Client) OnboardIdentityInvitation(ctx context.Context, body OnboardIdentityInvitationJSONRequestBody, reqEditors ...RequestEditorFn) (*http.Response, error) {
+	req, err := NewOnboardIdentityInvitationRequest(c.Server, body)
 	if err != nil {
 		return nil, err
 	}
@@ -10380,6 +10437,46 @@ func NewAcceptIdentityInvitationRequestWithBody(server string, params *AcceptIde
 		req.Header.Set("Idempotency-Key", headerParam0)
 
 	}
+
+	return req, nil
+}
+
+// NewOnboardIdentityInvitationRequest calls the generic OnboardIdentityInvitation builder with application/json body
+func NewOnboardIdentityInvitationRequest(server string, body OnboardIdentityInvitationJSONRequestBody) (*http.Request, error) {
+	var bodyReader io.Reader
+	buf, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	bodyReader = bytes.NewReader(buf)
+	return NewOnboardIdentityInvitationRequestWithBody(server, "application/json", bodyReader)
+}
+
+// NewOnboardIdentityInvitationRequestWithBody constructs an http.Request for the OnboardIdentityInvitation method, with any body, and a specified content type
+func NewOnboardIdentityInvitationRequestWithBody(server string, contentType string, body io.Reader) (*http.Request, error) {
+	var err error
+
+	serverURL, err := url.Parse(server)
+	if err != nil {
+		return nil, err
+	}
+
+	operationPath := fmt.Sprintf("/invitations/onboard")
+	if operationPath[0] == '/' {
+		operationPath = "." + operationPath
+	}
+
+	queryURL, err := serverURL.Parse(operationPath)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequest(http.MethodPost, queryURL.String(), body)
+	if err != nil {
+		return nil, err
+	}
+
+	req.Header.Add("Content-Type", contentType)
 
 	return req, nil
 }
@@ -17498,9 +17595,9 @@ type ClientWithResponsesInterface interface {
 	// Corresponds with GET /_demo/schema-evidence (the `GetDemoSchemaEvidence` operationId).
 	GetDemoSchemaEvidenceWithResponse(ctx context.Context, reqEditors ...RequestEditorFn) (*GetDemoSchemaEvidenceResponse, error)
 
-	// ListAgentConversationsWithResponse List AI-agent conversations visible to the authenticated operator.
+	// ListAgentConversationsWithResponse List AI-agent conversations visible to the authenticated principal.
 	//
-	// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor.
+	// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor. Ordinary users must select an authorized project. Their chats are private to the creator; authorized log readers may also read canonical system diagnosis reports. Access and environment restrictions are checked on every request, before pagination.
 	//
 	// Returns a wrapper object for the known response body format(s).
 	//
@@ -18356,6 +18453,24 @@ type ClientWithResponsesInterface interface {
 	//
 	// Corresponds with POST /invitations/accept (the `AcceptIdentityInvitation` operationId).
 	AcceptIdentityInvitationWithResponse(ctx context.Context, params *AcceptIdentityInvitationParams, body AcceptIdentityInvitationJSONRequestBody, reqEditors ...RequestEditorFn) (*AcceptIdentityInvitationResponse, error)
+
+	// OnboardIdentityInvitationWithBodyWithResponse Create an invited account and accept its invitation atomically.
+	//
+	// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+	//
+	// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+	OnboardIdentityInvitationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*OnboardIdentityInvitationResponse, error)
+
+	// OnboardIdentityInvitationWithResponse Create an invited account and accept its invitation atomically.
+	//
+	// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+	//
+	// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+	//
+	// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+	OnboardIdentityInvitationWithResponse(ctx context.Context, body OnboardIdentityInvitationJSONRequestBody, reqEditors ...RequestEditorFn) (*OnboardIdentityInvitationResponse, error)
 
 	// RevokeIdentityInvitationWithResponse Revoke an invitation in one exact scope.
 	//
@@ -20111,6 +20226,8 @@ type CreateAgentConversationResponse struct {
 	ApplicationproblemJSON400 *ErrorResponse
 	// ApplicationproblemJSON401 the response for an HTTP 401 `application/problem+json` response
 	ApplicationproblemJSON401 *Unauthorized
+	// ApplicationproblemJSON403 the response for an HTTP 403 `application/problem+json` response
+	ApplicationproblemJSON403 *Forbidden
 }
 
 // GetJSON201 returns the response for an HTTP 201 `application/json` response
@@ -20126,6 +20243,11 @@ func (r CreateAgentConversationResponse) GetApplicationproblemJSON400() *ErrorRe
 // GetApplicationproblemJSON401 returns the response for an HTTP 401 `application/problem+json` response
 func (r CreateAgentConversationResponse) GetApplicationproblemJSON401() *Unauthorized {
 	return r.ApplicationproblemJSON401
+}
+
+// GetApplicationproblemJSON403 returns the response for an HTTP 403 `application/problem+json` response
+func (r CreateAgentConversationResponse) GetApplicationproblemJSON403() *Forbidden {
+	return r.ApplicationproblemJSON403
 }
 
 // GetBody returns the raw response body bytes
@@ -24929,6 +25051,87 @@ func (r AcceptIdentityInvitationResponse) StatusCode() int {
 
 // ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
 func (r AcceptIdentityInvitationResponse) ContentType() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Header.Get("Content-Type")
+	}
+	return ""
+}
+
+type OnboardIdentityInvitationResponse struct {
+	Body         []byte
+	HTTPResponse *http.Response
+	// JSON201 the response for an HTTP 201 `application/json` response
+	JSON201 *struct {
+		Email openapi_types.Email `json:"email"`
+
+		// Invitation Non-secret invitation lifecycle metadata. This schema never contains the raw invitation credential or durable verifier material.
+		Invitation IdentityInvitation `json:"invitation"`
+		UserId     string             `json:"user_id"`
+	}
+	// ApplicationproblemJSON400 the response for an HTTP 400 `application/problem+json` response
+	ApplicationproblemJSON400 *ErrorResponse
+	// ApplicationproblemJSON409 the response for an HTTP 409 `application/problem+json` response
+	ApplicationproblemJSON409 *ErrorResponse
+	// ApplicationproblemJSON429 the response for an HTTP 429 `application/problem+json` response
+	ApplicationproblemJSON429 *ErrorResponse
+	// ApplicationproblemJSON503 the response for an HTTP 503 `application/problem+json` response
+	ApplicationproblemJSON503 *ErrorResponse
+}
+
+// GetJSON201 returns the response for an HTTP 201 `application/json` response
+func (r OnboardIdentityInvitationResponse) GetJSON201() *struct {
+	Email openapi_types.Email `json:"email"`
+
+	// Invitation Non-secret invitation lifecycle metadata. This schema never contains the raw invitation credential or durable verifier material.
+	Invitation IdentityInvitation `json:"invitation"`
+	UserId     string             `json:"user_id"`
+} {
+	return r.JSON201
+}
+
+// GetApplicationproblemJSON400 returns the response for an HTTP 400 `application/problem+json` response
+func (r OnboardIdentityInvitationResponse) GetApplicationproblemJSON400() *ErrorResponse {
+	return r.ApplicationproblemJSON400
+}
+
+// GetApplicationproblemJSON409 returns the response for an HTTP 409 `application/problem+json` response
+func (r OnboardIdentityInvitationResponse) GetApplicationproblemJSON409() *ErrorResponse {
+	return r.ApplicationproblemJSON409
+}
+
+// GetApplicationproblemJSON429 returns the response for an HTTP 429 `application/problem+json` response
+func (r OnboardIdentityInvitationResponse) GetApplicationproblemJSON429() *ErrorResponse {
+	return r.ApplicationproblemJSON429
+}
+
+// GetApplicationproblemJSON503 returns the response for an HTTP 503 `application/problem+json` response
+func (r OnboardIdentityInvitationResponse) GetApplicationproblemJSON503() *ErrorResponse {
+	return r.ApplicationproblemJSON503
+}
+
+// GetBody returns the raw response body bytes
+func (r OnboardIdentityInvitationResponse) GetBody() []byte {
+	return r.Body
+}
+
+// Status returns HTTPResponse.Status
+func (r OnboardIdentityInvitationResponse) Status() string {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.Status
+	}
+	return http.StatusText(0)
+}
+
+// StatusCode returns HTTPResponse.StatusCode
+func (r OnboardIdentityInvitationResponse) StatusCode() int {
+	if r.HTTPResponse != nil {
+		return r.HTTPResponse.StatusCode
+	}
+	return 0
+}
+
+// ContentType is a convenience method to retrieve the Content-Type value from the HTTP response headers
+func (r OnboardIdentityInvitationResponse) ContentType() string {
 	if r.HTTPResponse != nil {
 		return r.HTTPResponse.Header.Get("Content-Type")
 	}
@@ -34347,9 +34550,9 @@ func (c *ClientWithResponses) GetDemoSchemaEvidenceWithResponse(ctx context.Cont
 	return ParseGetDemoSchemaEvidenceResponse(rsp)
 }
 
-// ListAgentConversationsWithResponse List AI-agent conversations visible to the authenticated operator.
+// ListAgentConversationsWithResponse List AI-agent conversations visible to the authenticated principal.
 //
-// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor.
+// Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor. Ordinary users must select an authorized project. Their chats are private to the creator; authorized log readers may also read canonical system diagnosis reports. Access and environment restrictions are checked on every request, before pagination.
 //
 // Returns a wrapper object for the known response body format(s).
 //
@@ -35834,6 +36037,36 @@ func (c *ClientWithResponses) AcceptIdentityInvitationWithResponse(ctx context.C
 		return nil, err
 	}
 	return ParseAcceptIdentityInvitationResponse(rsp)
+}
+
+// OnboardIdentityInvitationWithBodyWithResponse Create an invited account and accept its invitation atomically.
+//
+// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+//
+// Takes any type of body and a specified content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+func (c *ClientWithResponses) OnboardIdentityInvitationWithBodyWithResponse(ctx context.Context, contentType string, body io.Reader, reqEditors ...RequestEditorFn) (*OnboardIdentityInvitationResponse, error) {
+	rsp, err := c.OnboardIdentityInvitationWithBody(ctx, contentType, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOnboardIdentityInvitationResponse(rsp)
+}
+
+// OnboardIdentityInvitationWithResponse Create an invited account and accept its invitation atomically.
+//
+// Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+//
+// Takes a body of the `application/json` content type, and returns a wrapper object for the known response body format(s).
+//
+// Corresponds with POST /invitations/onboard (the `OnboardIdentityInvitation` operationId).
+func (c *ClientWithResponses) OnboardIdentityInvitationWithResponse(ctx context.Context, body OnboardIdentityInvitationJSONRequestBody, reqEditors ...RequestEditorFn) (*OnboardIdentityInvitationResponse, error) {
+	rsp, err := c.OnboardIdentityInvitation(ctx, body, reqEditors...)
+	if err != nil {
+		return nil, err
+	}
+	return ParseOnboardIdentityInvitationResponse(rsp)
 }
 
 // RevokeIdentityInvitationWithResponse Revoke an invitation in one exact scope.
@@ -38454,6 +38687,13 @@ func ParseCreateAgentConversationResponse(rsp *http.Response) (*CreateAgentConve
 			return nil, err
 		}
 		response.ApplicationproblemJSON401 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 403:
+		var dest Forbidden
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON403 = &dest
 
 	}
 
@@ -42343,6 +42583,66 @@ func ParseAcceptIdentityInvitationResponse(rsp *http.Response) (*AcceptIdentityI
 			headers.IdempotentReplayed = &value
 		}
 		response.Headers200 = &headers
+	}
+
+	return response, nil
+}
+
+// ParseOnboardIdentityInvitationResponse parses an HTTP response from a OnboardIdentityInvitationWithResponse call
+func ParseOnboardIdentityInvitationResponse(rsp *http.Response) (*OnboardIdentityInvitationResponse, error) {
+	bodyBytes, err := io.ReadAll(rsp.Body)
+	defer func() { _ = rsp.Body.Close() }()
+	if err != nil {
+		return nil, err
+	}
+
+	response := &OnboardIdentityInvitationResponse{
+		Body:         bodyBytes,
+		HTTPResponse: rsp,
+	}
+
+	switch {
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 201:
+		var dest struct {
+			Email openapi_types.Email `json:"email"`
+
+			// Invitation Non-secret invitation lifecycle metadata. This schema never contains the raw invitation credential or durable verifier material.
+			Invitation IdentityInvitation `json:"invitation"`
+			UserId     string             `json:"user_id"`
+		}
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.JSON201 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 400:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON400 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 409:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON409 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 429:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON429 = &dest
+
+	case strings.Contains(rsp.Header.Get("Content-Type"), "json") && rsp.StatusCode == 503:
+		var dest ErrorResponse
+		if err := json.Unmarshal(bodyBytes, &dest); err != nil {
+			return nil, err
+		}
+		response.ApplicationproblemJSON503 = &dest
+
 	}
 
 	return response, nil

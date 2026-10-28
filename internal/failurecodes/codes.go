@@ -45,6 +45,8 @@ const (
 	AuthorizationDenied Code = "AUTHORIZATION_DENIED"
 	// AuthRateLimited is returned when a public credential-verification budget is exhausted.
 	AuthRateLimited Code = "AUTH_RATE_LIMITED"
+	// InvitationAccountExists requires the invited account to sign in normally.
+	InvitationAccountExists Code = "INVITATION_ACCOUNT_EXISTS"
 	// AuthOperatorRecoveryRequired is returned when a route accepts only the
 	// installation-wide operator recovery credential and the caller presented
 	// a human session instead. Administrator credential recovery is deliberately
@@ -453,6 +455,7 @@ var registered = map[Code]struct{}{
 	AuthSessionInvalid:                     {},
 	AuthorizationDenied:                    {},
 	AuthRateLimited:                        {},
+	InvitationAccountExists:                {},
 	AuthOperatorRecoveryRequired:           {},
 	RequestRateLimited:                     {},
 	IdempotencyKeyInvalid:                  {},
@@ -635,6 +638,7 @@ var recoveryHints = map[Code]string{
 	AuthSessionInvalid:                     "Sign in again; the session may have expired or been revoked.",
 	AuthorizationDenied:                    "Ask a workspace or project administrator for the capability required by this action.",
 	AuthRateLimited:                        "Wait for the Retry-After interval before attempting to sign in again.",
+	InvitationAccountExists:                "Sign in with the existing account and accept the invitation. Its password was not changed.",
 	AuthOperatorRecoveryRequired:           "Retry with the installation's `MIDNIGHT_API_BEARER_TOKEN`; a signed-in account cannot reset an administrator credential.",
 	RequestRateLimited:                     "Wait for the Retry-After interval before issuing more API requests or opening another stream.",
 	IdempotencyKeyInvalid:                  "Issue a new Idempotency-Key matching the documented format and retry.",
@@ -788,6 +792,7 @@ var orderedCodes = []Code{
 	AuthSessionInvalid,
 	AuthorizationDenied,
 	AuthRateLimited,
+	InvitationAccountExists,
 	AuthOperatorRecoveryRequired,
 	RequestRateLimited,
 	IdempotencyKeyInvalid,

@@ -23,7 +23,7 @@ vi.mock("./sse", () => ({
   }),
 }));
 
-import { getConversation, openAgentStream, postMessage, AgentRequestError } from "./agent";
+import { createConversation, getConversation, openAgentStream, postMessage, AgentRequestError } from "./agent";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -33,6 +33,12 @@ afterEach(() => {
 });
 
 describe("agent HTTP client", () => {
+  it("sends the explicit project, service and environment conversation scope", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(new Response(JSON.stringify({id: "cnv_scoped"}), {status: 201}));
+    const input = {project_id: "prj_one", service_id: "svc_one", environment_id: "env_one", title: "Inspect this environment"};
+    await createConversation(input);
+    expect(fetchMock).toHaveBeenCalledWith("/api/v1alpha/agent/conversations", expect.objectContaining({method: "POST", body: JSON.stringify(input)}));
+  });
   it("encodes opaque conversation IDs before constructing a route", async () => {
     const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
       new Response(

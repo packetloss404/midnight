@@ -2,14 +2,93 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/midnight/midnight/internal/preflight"
 )
+
+func TestNewLiveHostSourceWiresBoundedReadProbesAndPreservesOverrides(t *testing.T) {
+	defaults := NewLiveHostSource(preflight.HostSource{})
+	if _, ok := defaults.Reader.(preflight.OSFileReader); !ok {
+		t.Fatal("live filesystem reader missing")
+	}
+	if _, ok := defaults.Runner.(preflight.OSCommandRunner); !ok {
+		t.Fatal("live command runner missing")
+	}
+	if defaults.Paths.PackageEnv != "/etc/midnight/midnight.env" || defaults.Paths.DockerDaemonJSON != "/etc/docker/daemon.json" || defaults.Paths.DatabaseDSN != "/etc/midnight/db.dsn" {
+		t.Fatalf("live installed paths=%+v", defaults.Paths)
+	}
+	if defaults.Hints.FirewallMode != "" || defaults.Hints.TimeSyncStatus != "" || defaults.Hints.WorkerRuntimeBackend != "" {
+		t.Fatal("live source invented healthy hints")
+	}
+	var calls int
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	source := NewLiveHostSource(preflight.HostSource{
+		Reader: stubReader{}, Paths: preflight.HostPaths{PackageEnv: "/fixture/midnight.env"},
+		Runner: preflight.CommandRunnerFunc(func(ctx context.Context, name string, args ...string) ([]byte, error) {
+			calls++
+			deadline, ok := ctx.Deadline()
+			if !ok || time.Until(deadline) > 3*time.Second {
+				t.Error("live command has no bounded context")
+			}
+			if !errors.Is(ctx.Err(), context.Canceled) {
+				t.Error("caller cancellation was discarded")
+			}
+			return nil, ctx.Err()
+		}),
+	})
+	if source.Paths.PackageEnv != "/fixture/midnight.env" {
+		t.Fatal("live constructor replaced explicit input")
+	}
+	results := RunLiveChecks(ctx, LiveOptions{Source: source, Live: true, FilterIDs: []string{"OR-CHK-DOC-001", "OR-CHK-DOC-003"}})
+	if calls != 2 || len(results) != 2 {
+		t.Fatalf("live read probes were skipped: calls=%d results=%+v", calls, results)
+	}
+	for _, result := range results {
+		if result.Status != StatusConfigError {
+			t.Fatalf("canceled probe claimed healthy: %+v", result)
+		}
+	}
+}
+
+func TestFixturePathsOnlyNeverReadsPackageDerivedPaths(t *testing.T) {
+	var reads []string
+	source := preflight.HostSource{
+		FixturePathsOnly: true,
+		Paths:            preflight.HostPaths{PackageEnv: "captured.env"},
+		Reader: preflight.FileReaderFunc(func(path string) ([]byte, error) {
+			reads = append(reads, path)
+			if path != "captured.env" {
+				t.Errorf("fixture read an uncaptured path %q", path)
+				return nil, os.ErrNotExist
+			}
+			return []byte("MIDNIGHT_DB_DSN_FILE=/outside/db.dsn\nMIDNIGHT_WORKER_ROUTE_CONFIG_DIR=/outside/routes\nMIDNIGHT_BUILDKITD_BIN=/outside/buildkitd\nMIDNIGHT_BUILDCTL=/outside/buildctl\nMIDNIGHT_REGISTRY_BIN=/outside/registry\n"), nil
+		}),
+	}
+	if result := runCheckDatabaseDSN(context.Background(), source); result.Status != StatusSkip {
+		t.Fatalf("doctor followed package DSN: %+v", result)
+	}
+	if result := runCheckRouteConfigDirWritable(context.Background(), source); result.Status != StatusFail || !strings.Contains(result.Message, "not configured") {
+		t.Fatalf("doctor followed package routes: %+v", result)
+	}
+	for _, check := range []func(preflight.HostSource) preflight.Result{
+		preflight.CheckDatabaseDSNConfigured, preflight.CheckRouteConfigDirWritable, preflight.CheckRuntimeBinariesPresent,
+	} {
+		if result := check(source); result.Status != preflight.StatusSkip {
+			t.Fatalf("preflight followed package path: %+v", result)
+		}
+	}
+	if len(reads) == 0 {
+		t.Fatal("test did not consume captured package configuration")
+	}
+}
 
 type stubReader map[string][]byte
 

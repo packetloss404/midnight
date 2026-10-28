@@ -85,6 +85,7 @@ var canonicalRuntimeRESTRoutes = []RuntimeRouteOperation{
 	{Method: "GET", Path: "/api/v1alpha/invitations", Pattern: "/api/v1alpha/invitations", Experimental: false},
 	{Method: "POST", Path: "/api/v1alpha/invitations", Pattern: "/api/v1alpha/invitations", Experimental: false},
 	{Method: "POST", Path: "/api/v1alpha/invitations/accept", Pattern: "/api/v1alpha/invitations/accept", Experimental: false},
+	{Method: "POST", Path: "/api/v1alpha/invitations/onboard", Pattern: "/api/v1alpha/invitations/onboard", Experimental: false},
 	{Method: "DELETE", Path: "/api/v1alpha/invitations/{invitation_id}", Pattern: "/api/v1alpha/invitations/{invitation_id}", Experimental: false},
 	{Method: "GET", Path: "/api/v1alpha/invitations/{invitation_id}", Pattern: "/api/v1alpha/invitations/{invitation_id}", Experimental: false},
 	{Method: "POST", Path: "/api/v1alpha/invitations/{invitation_id}/reissue", Pattern: "/api/v1alpha/invitations/{invitation_id}/reissue", Experimental: false},
