@@ -104,7 +104,8 @@ try {
     environment[variable] = path;
   }
   const operatorToken = randomBytes(32).toString("base64url");
-  await writeFile(statePath, JSON.stringify({ operatorToken }), { mode: 0o600 });
+  // The fixture helper consumes only this already-validated disposable DSN.
+  await writeFile(statePath, JSON.stringify({ operatorToken, fixtureDsn: dsn }), { mode: 0o600 });
   Object.assign(environment, {
     MIDNIGHT_DB_DSN: dsn,
     MIDNIGHT_API_BEARER_TOKEN: operatorToken,

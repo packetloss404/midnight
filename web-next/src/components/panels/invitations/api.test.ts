@@ -172,7 +172,8 @@ describe("identity invitation API", () => {
     );
     await revokeIdentityInvitation(
       scope,
-      "inv/replacement",
+      "inv_/replacement",
+      3,
       "idem-revoke",
     );
 
@@ -192,11 +193,11 @@ describe("identity invitation API", () => {
     );
     expect(apiFetch).toHaveBeenNthCalledWith(
       2,
-      "/invitations/inv%2Freplacement?workspace_id=wrk_one&project_id=prj_one",
+      "/invitations/inv_%2Freplacement?workspace_id=wrk_one&project_id=prj_one",
       {
         auth: "human",
         method: "DELETE",
-        headers: { "Idempotency-Key": "idem-revoke" },
+        headers: { "Idempotency-Key": "idem-revoke", "If-Match": '"3"' },
       },
     );
   });

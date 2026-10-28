@@ -501,7 +501,10 @@ apply that synthetic transition to the successful public-app candidate.
 
 ## Audit And Safety Checks
 
-Privileged mutations must emit audit rows and generated audit evidence must verify.
+Privileged mutations must emit audit rows. Acceptance requires a nonempty signed
+checkpoint verified against independently pinned public keys; a hash-only chain
+does not satisfy this check. Configure the worker and server using
+[signed audit checkpoints](security/audit-checkpoints.md) before running it.
 
 API evidence:
 
@@ -509,16 +512,31 @@ API evidence:
 curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/audit/events?limit=20" | tee "$MVP_EVIDENCE_DIR/audit-events.json"
 curl -fsS "$MIDNIGHT_API_BASE/api/v1alpha/dashboard/audit-evidence" | tee "$MVP_EVIDENCE_DIR/audit-evidence.json"
 jq -e '.events | length >= 1' "$MVP_EVIDENCE_DIR/audit-events.json"
-jq -e '.status == "ready" or .status == "pass" or .status == "verified"' "$MVP_EVIDENCE_DIR/audit-evidence.json"
+jq -e '.status == "ready" and .event_count > 0 and .checkpoint_count > 0
+  and .verification.valid == true
+  and .verification.rows_checked == .event_count
+  and .verification.checkpoints_checked == .checkpoint_count
+  and (.verification.signature_status == "verified" or .verification.signature_status == "partial")
+  and .verification.signed_through_sequence > 0' "$MVP_EVIDENCE_DIR/audit-evidence.json"
 ```
 
 CLI verification when a JSONL audit export is available:
 
 ```sh
-midnight audit verify --from-jsonl "$MVP_EVIDENCE_DIR/audit-export.jsonl" --json \
+midnight audit verify --from-jsonl "$MVP_EVIDENCE_DIR/audit-export.jsonl" \
+  --public-key-dir "$MVP_AUDIT_PUBLIC_KEY_DIR" --json \
   | tee "$MVP_EVIDENCE_DIR/audit-verify.json"
-jq -e '.status == "verified" or .valid == true' "$MVP_EVIDENCE_DIR/audit-verify.json"
+jq -e '.valid == true and .rows_checked > 0 and .checkpoints_checked > 0
+  and (.signature_status == "verified" or .signature_status == "partial")
+  and .signed_through_sequence > 0' "$MVP_EVIDENCE_DIR/audit-verify.json"
 ```
+
+The runner accepts `MVP_AUDIT_PUBLIC_KEY` for one pinned key or
+`MVP_AUDIT_PUBLIC_KEY_DIR` for a rotation overlap directory. Daily checkpoints
+can leave a recent unsigned tail: acceptance reports `signed_through_sequence`
+and `unsigned_rows` explicitly. A partial signature result authenticates only
+the checkpointed prefix. Empty, untrusted, tampered, or inconsistent snapshots
+fail the check.
 
 Safety assertion:
 

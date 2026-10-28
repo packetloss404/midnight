@@ -8,6 +8,33 @@ correspond to individual public commits. See [Public Git History](README.md#publ
 
 ## Unreleased
 
+### Added and fixed (2026-10-27, acceptance gaps)
+
+- Added restart-safe UTC audit checkpoint scheduling, atomic signing under
+  PostgreSQL's audit lock, durable private keys, consistent signed exports,
+  and explicit public-key trust. Dashboard and CLI evidence now distinguish
+  hash validity, signature coverage, missing trust, and unsigned tails.
+- Made invitation acceptance reachable by ordinary users and preserved the
+  displayed resource version on invitation/token revocation. Expanded real
+  PostgreSQL/Chromium journeys to invitations, role changes, scoped automation
+  credentials, and administrator recovery/session revocation.
+- Selected the configured AI provider and model for automatic diagnosis;
+  prevented missing MiniMax keys and SDK environment credentials from
+  forwarding another provider's API key or bearer token.
+- Wired diagnosis to canonical deployment context, redacted durable logs,
+  scoped report persistence, and operation-event attachment. Added a required
+  PostgreSQL/provider-adapter canary and persisted attachment replay refusal.
+- Added credential-ready product AI/diagnosis, GitHub, and native ACME staging
+  acceptance with private configuration, scoped writes, deadlines, honest
+  blocked outcomes, and cleanup evidence. External execution still requires
+  the documented operator setup and credentials.
+- Added dedicated real Railpack toolchain and offline recovery CI lanes.
+  Recovery checks destruction/readback, wrong passphrases/confirmation,
+  staged tampering, replay, and verified fixture cleanup; local fixtures do
+  not claim off-host or whole-host-loss recovery.
+- Updated the indirect `go-jose/v4` dependency to `v4.1.6` for
+  [GHSA-mgcc-cww5-fp2q](https://github.com/advisories/GHSA-mgcc-cww5-fp2q).
+
 ### Fixed (2026-10-25, feature verification)
 
 - Updated the pinned Go toolchain to 1.26.10 to address the `crypto/x509`

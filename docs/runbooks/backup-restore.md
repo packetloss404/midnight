@@ -54,6 +54,7 @@ sudo midnight-recovery create \
   --root /etc/midnight=etc/midnight \
   --root /var/lib/midnight/registry=var/lib/midnight/registry \
   --root /var/lib/midnight/acme=var/lib/midnight/acme \
+  --root /var/lib/midnight/audit=var/lib/midnight/audit \
   --volume-backup-id vbkp_example \
   --offline-confirmed
 ```
@@ -63,6 +64,12 @@ followed by a plaintext commit index authenticated with a separately salted,
 310,000-round PBKDF2-SHA-256 key. The slow derived key prevents the index from
 becoming a cheap passphrase oracle. Partial object sets without a valid index
 must not be treated as a completed backup.
+
+Include the configured audit signing-key directory if it differs from the
+default above. Its private key must survive with mode `0600` inside a `0700`
+directory; signed database history without that key makes the worker refuse
+startup. Keep its protected backup and independently trusted public keys
+available off-host. Never attach private key bytes to recovery evidence.
 
 Restart and validate the platform after the command succeeds:
 

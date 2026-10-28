@@ -32,6 +32,7 @@ import { AppShell } from "@/components/AppShell";
 import { AppSidebar } from "@/components/AppSidebar";
 import { TopNav } from "@/components/TopNav";
 import { ProjectNav } from "@/components/ProjectNav";
+import { InvitationAcceptance } from "@/components/panels/invitations/InvitationAcceptance";
 import { CommandPalette } from "@/components/CommandPalette";
 import type { AgentRouteContext } from "@/components/AgentPanel";
 import { useEnvironments, useIdentityWorkspaces, useProjects } from "@/api/hooks";
@@ -411,11 +412,12 @@ function HumanProjectsIndex({ projects }: { projects?: Project[] }) {
           ) : null}
         </div>
         <p className="m-0 mt-1 text-sm text-muted">
-          Human sessions show only projects granted through workspace
-          membership. Open a project to view the environments, services,
+          Human sessions show only projects granted through workspace or direct
+          project membership. Open a project to view the environments, services,
           deployments, configuration, and logs allowed by your role.
         </p>
       </header>
+      <InvitationAcceptance />
       {!projects ? (
         <p className="m-0 text-sm text-muted">Loading projects…</p>
       ) : null}

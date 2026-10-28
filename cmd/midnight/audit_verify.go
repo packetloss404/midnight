@@ -168,6 +168,7 @@ func loadVerifyingKeys(keyFile, keyDir string) ([]audit.VerifyingKey, error) {
 
 func writeHumanReport(w io.Writer, r audit.VerifyReport) {
 	fmt.Fprintf(w, "outcome: %s\n", r.Outcome)
+	fmt.Fprintf(w, "signature_status: %s (signed_through_sequence=%d unsigned_rows=%d)\n", r.SignatureStatus, r.SignedThroughSequence, r.UnsignedRows)
 	fmt.Fprintf(w, "rows checked: %d\n", r.RowsChecked)
 	fmt.Fprintf(w, "checkpoints checked: %d\n", r.CheckpointsChecked)
 	fmt.Fprintf(w, "genesis: %s\n", r.GenesisHashHex)

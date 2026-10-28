@@ -42,14 +42,17 @@ type Break struct {
 
 // VerifyReport is the structured output of Verify.
 type VerifyReport struct {
-	Outcome            VerifyOutcome `json:"outcome"`
-	Status             string        `json:"status"`
-	Valid              bool          `json:"valid"`
-	RowsChecked        int           `json:"rows_checked"`
-	CheckpointsChecked int           `json:"checkpoints_checked"`
-	Breaks             []Break       `json:"breaks,omitempty"`
-	Warnings           []Break       `json:"warnings,omitempty"`
-	GenesisHashHex     string        `json:"genesis_hash"`
+	Outcome               VerifyOutcome `json:"outcome"`
+	Status                string        `json:"status"`
+	Valid                 bool          `json:"valid"`
+	RowsChecked           int           `json:"rows_checked"`
+	CheckpointsChecked    int           `json:"checkpoints_checked"`
+	Breaks                []Break       `json:"breaks,omitempty"`
+	Warnings              []Break       `json:"warnings,omitempty"`
+	GenesisHashHex        string        `json:"genesis_hash"`
+	SignatureStatus       string        `json:"signature_status"`
+	SignedThroughSequence int64         `json:"signed_through_sequence"`
+	UnsignedRows          int           `json:"unsigned_rows"`
 }
 
 // Source is anything the verifier can read rows + checkpoints from. The
@@ -73,6 +76,15 @@ func Verify(ctx context.Context, src Source, keys []VerifyingKey) (report Verify
 	defer func() {
 		reportStatus(&report)
 	}()
+	if chainSource, ok := src.(SourceFromChain); ok {
+		snapshot, snapshotErr := ReadSnapshot(ctx, chainSource.Chain)
+		if snapshotErr != nil {
+			report.Outcome = OutcomeSourceError
+			report.Breaks = append(report.Breaks, Break{Kind: "source_read", Detail: snapshotErr.Error()})
+			return report, snapshotErr
+		}
+		src = snapshot.Source()
+	}
 	rows, err := src.Rows(ctx)
 	if err != nil {
 		report.Outcome = OutcomeSourceError
@@ -83,6 +95,10 @@ func Verify(ctx context.Context, src Source, keys []VerifyingKey) (report Verify
 
 	expectedPrev := GenesisHash()
 	for i := range rows {
+		if err := ctx.Err(); err != nil {
+			report.Outcome = OutcomeSourceError
+			return report, err
+		}
 		r := rows[i]
 		report.RowsChecked++
 		canonical, err := CanonicalRow(r)
@@ -116,6 +132,11 @@ func Verify(ctx context.Context, src Source, keys []VerifyingKey) (report Verify
 		return report, err
 	}
 	sort.Slice(checkpoints, func(i, j int) bool { return checkpoints[i].ID < checkpoints[j].ID })
+	report.SignatureStatus = "unsigned"
+	if len(rows) > 0 && len(checkpoints) == 0 && len(keys) > 0 {
+		report.Outcome = elevateOutcome(report.Outcome, OutcomeSignatureBreak)
+		report.Breaks = append(report.Breaks, Break{Kind: "missing_checkpoint", Detail: "trusted verification requested but export contains no signed checkpoint"})
+	}
 
 	rowsByID := make(map[int64]Row, len(rows))
 	for _, r := range rows {
@@ -124,6 +145,10 @@ func Verify(ctx context.Context, src Source, keys []VerifyingKey) (report Verify
 
 	var prevCheckpointID int64
 	for i := range checkpoints {
+		if err := ctx.Err(); err != nil {
+			report.Outcome = OutcomeSourceError
+			return report, err
+		}
 		cp := checkpoints[i]
 		report.CheckpointsChecked++
 
@@ -158,6 +183,23 @@ func Verify(ctx context.Context, src Source, keys []VerifyingKey) (report Verify
 			report.Warnings = append(report.Warnings, Break{Kind: "checkpoint_link", CheckpointID: cp.ID, Detail: fmt.Sprintf("prev_checkpoint_id=%d expected=%d (acceptable on pruned partition)", cp.PrevCheckpointID, prevCheckpointID)})
 		}
 		prevCheckpointID = cp.ID
+		if cp.LastRowID > report.SignedThroughSequence {
+			report.SignedThroughSequence = cp.LastRowID
+		}
+	}
+	for _, row := range rows {
+		if row.Sequence > report.SignedThroughSequence {
+			report.UnsignedRows++
+		}
+	}
+	if len(checkpoints) > 0 {
+		report.SignatureStatus = "verified"
+		if report.UnsignedRows > 0 {
+			report.SignatureStatus = "partial"
+		}
+	}
+	if report.Outcome != OutcomeOK && report.Outcome != OutcomeWarn {
+		report.SignatureStatus = "failed"
 	}
 
 	if report.Outcome == OutcomeOK && len(report.Warnings) > 0 {

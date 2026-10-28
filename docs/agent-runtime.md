@@ -1,12 +1,23 @@
 # Agent runtime environment
 
-> **Status (as of this commit):** the agent is wired end to end. Chat, the tool registry, the MCP server (`/mcp/v1`), per-tool audit, the spend caps, and the build-failure diagnosis worker are all reachable in a running `midnight-server`. The read tools and four of the five mutating tools execute against the real control plane. Two limits are deliberate and documented below rather than papered over: **`deploy_from_source` is not available through the agent at all**, and **variable and deployment mutations require a signed-in administrator session** — an operator recovery token can drive redeploy/rollback but not variable changes. See [What the agent cannot do](#what-the-agent-cannot-do).
+> **Status (as of this commit):** chat, the tool registry, MCP (`/mcp/v1`), per-tool audit, and spend caps are wired into `midnight-server`. Opt-in failure diagnosis runs in `midnight-worker`, persists a scoped report, and attaches its ID through a durable operation event. Local adapter and PostgreSQL tests establish this wiring; real paid-provider execution still requires [external acceptance](remaining-e2e-acceptance.md). **`deploy_from_source` is unavailable through the agent**, and **variable and deployment mutations require a signed-in administrator session** — an operator recovery token can drive redeploy/rollback but not variable changes. See [What the agent cannot do](#what-the-agent-cannot-do).
 
-The in-product AI agent (chat panel, build-failure diagnosis, MCP server) is
-wired at `midnight-server serve` bootstrap. The chat panel works
-end-to-end whenever the selected provider's API key is set. Everything else
-documented here is optional -- the defaults are tuned for a single-tenant
-operator who just wants the panel to work.
+Chat and MCP are wired at `midnight-server serve` bootstrap. The chat panel
+requires a selected provider key, a supported model/endpoint, and administrator
+authentication. The defaults target a single trusted installation.
+
+Chat and persisted diagnosis routes accept an installation-administrator human
+session or the configured operator recovery credential. Ordinary tenant human
+sessions are refused. These routes do not implement per-project conversation
+RBAC: project/service tags describe context, while administrator authority is
+installation-wide. Use an isolated QA installation for live acceptance.
+
+The worker resolves diagnosis context from the failed operation's unique
+canonical deployment, reads bounded redacted build/runtime log tails, and sends
+no tool registry or mutation capability. It saves the report before appending
+its operation attachment event. Replayed events with an existing attachment
+avoid another provider call. Simultaneous workers before the first attachment
+can still generate duplicate reports; this is not an exactly-once guarantee.
 
 When the selected provider key is unset the server still boots; only the
 chat-send path returns a clear "caller is not configured" error. Every other
@@ -29,7 +40,7 @@ surface (REST CRUD, audit, deploys, etc.) stays available.
 | `MIDNIGHT_MINIMAX_CHAT_MODEL` | `MiniMax-M2.7` | MiniMax model id for the chat panel. |
 | `MIDNIGHT_MINIMAX_BASE_URL` | `https://api.minimax.io/anthropic` | Optional MiniMax base URL override. |
 | `MIDNIGHT_AGENT_DIAGNOSIS_ENABLED` | `false` | Turns the build-failure diagnosis worker on. Off by default: a failed build should not start spending money on a host nobody configured for it. When on, `midnight-worker` builds the diagnosis caller and conversation store at startup; if the provider key is missing it says so once on stderr and stays inert. |
-| `MIDNIGHT_AGENT_DIAGNOSIS_MODEL` | `claude-opus-5` | Model id used for the diagnosis worker. Only consumed when diagnosis is enabled. |
+| `MIDNIGHT_AGENT_DIAGNOSIS_MODEL` | provider-dependent | Explicit diagnosis-model override. Otherwise Anthropic uses its diagnosis default, while OpenAI/MiniMax use their configured chat model or provider default. The worker uses the selected `MIDNIGHT_AGENT_PROVIDER`, and stamps the same model on the persisted diagnosis conversation. |
 | `MIDNIGHT_AGENT_DIAGNOSIS_RATE` | `10/5m` | Per-host token-bucket rate for diagnosis runs, as `<count>/<duration>` (e.g. `10/5m`). Malformed values fall back to the defaults. |
 | `MIDNIGHT_AGENT_ALLOW_MUTATIONS` | `true` | Operator-level brake on mutating tool calls. Set to `false` (or `0` / `no` / `off`) to globally disable every state-changing tool. The per-message toggle from the chat UI is ANDed with this, and the brake is re-evaluated on every mutating dispatch, not only at boot. |
 | `MIDNIGHT_AGENT_CONVERSATION_TOKEN_CAP` | `200000` | Per-conversation total token cap. Once exceeded, further turns on that conversation are refused with HTTP 429 before the model is called. |

@@ -81,10 +81,30 @@ browser covers enrollment/TOTP, sessions, desired configuration and encrypted
 variables, compare-and-swap, and logout revocation, with no request mocks.
 CI uses a separate disposable PostgreSQL service and retains failure
 diagnostics. No production database or external provider account is needed.
+Additional journeys cover invitation roles, scoped automation credentials,
+and administrator recovery. Non-bootstrap users are explicit disposable
+identity fixtures. Credential-bearing browser traces and screenshots are
+disabled; this is not evidence of a new-account registration flow.
+
+The Railpack toolchain job builds the production worker image and pinned
+frontend, pushes and runs Node/Python/Go/Dockerfile fixtures, and checks a real
+secret mount without plaintext in retained artifacts. It needs Docker,
+privileged BuildKit, outbound access to the pinned registries, Go, and Python.
+It does not deploy those images through Midnight's installed control plane.
+
+The offline recovery CLI job uses only an owned PostgreSQL Docker container
+and temporary filesystem roots. It backs up real bytes, destroys both fixture
+states, rejects wrong passphrases/confirmation and staged tampering, restores,
+reads back, and replays a completed apply. Its default file destination is
+local proof. Setting `MIDNIGHT_PARITY_BACKUP_DESTINATION` to a credential-free
+S3 URI uses the existing backup credential chain; it still does not claim a
+whole-host-loss drill. No operator database or production roots are accepted.
 
 Integration JSON results and skip names are written to
 `artifacts/ci-integration/`; runtime results/logs go to
 `artifacts/ci-live-runtime/`. The workflow uploads both even on failure.
+Toolchain and recovery evidence use `artifacts/ci-toolchain/` and
+`artifacts/ci-recovery/`; their dedicated jobs retain them on failure too.
 Per-commit job results, rather than the presence of these commands, establish
 which assertions passed. See [feature verification](../feature-verification.md)
 for the remaining installed/external boundaries.

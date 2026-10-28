@@ -71,6 +71,9 @@ type FailureContext struct {
 	OperationKind  string
 	FailureCode    orailtypes.FailureCode
 	FailureReason  string
+	WorkspaceID    string
+	ProjectID      string
+	EnvironmentID  string
 	ServiceID      string
 	ServiceSlug    string
 	DeploymentID   string

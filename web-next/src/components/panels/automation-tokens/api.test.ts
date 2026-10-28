@@ -157,6 +157,7 @@ describe("project automation-token API", () => {
     await revokeProjectAutomationToken(
       "prj/one",
       "sat/one",
+      7,
       "idem-revoke-1",
     );
 
@@ -165,7 +166,7 @@ describe("project automation-token API", () => {
       {
         auth: "human",
         method: "DELETE",
-        headers: { "Idempotency-Key": "idem-revoke-1" },
+        headers: { "Idempotency-Key": "idem-revoke-1", "If-Match": '"7"' },
       },
     );
   });

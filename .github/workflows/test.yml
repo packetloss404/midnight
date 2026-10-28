@@ -79,6 +79,50 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+  recovery-cli:
+    name: Offline recovery CLI end to end
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - name: Destroy and restore disposable PostgreSQL and filesystem bytes
+        env:
+          MIDNIGHT_PARITY_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/ci-recovery
+        run: bash scripts/parity-restore-acceptance.sh
+      - name: Retain recovery proof and refusal evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: recovery-cli-results
+          path: artifacts/ci-recovery
+          if-no-files-found: error
+          retention-days: 7
+
+  railpack-toolchain:
+    name: Railpack builds and secret mounts end to end
+    runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.10'
+      - name: Build, push, and run language and secret fixtures
+        env:
+          MIDNIGHT_PARITY_EVIDENCE_DIR: ${{ github.workspace }}/artifacts/ci-toolchain
+        run: bash scripts/parity-toolchain-acceptance.sh
+      - name: Retain toolchain proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: railpack-toolchain-results
+          path: artifacts/ci-toolchain
+          if-no-files-found: error
+          retention-days: 7
+
   browser-postgres:
     name: Browser with durable human sessions
     runs-on: ${{ vars.MIDNIGHT_CI_RUNNER || 'ubuntu-24.04' }}

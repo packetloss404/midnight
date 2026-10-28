@@ -68,12 +68,13 @@ func (c *fakeCaller) lastRequest() (CallRequest, bool) {
 }
 
 type fakeConversation struct {
-	mu       sync.Mutex
-	started  []string
-	tags     []map[string]string
-	messages []string
-	conv     Conversation
-	startErr error
+	mu        sync.Mutex
+	started   []string
+	tags      []map[string]string
+	messages  []string
+	conv      Conversation
+	startErr  error
+	appendErr error
 }
 
 func (f *fakeConversation) StartConversation(_ context.Context, title string, tags map[string]string) (Conversation, error) {
@@ -97,8 +98,57 @@ func (f *fakeConversation) StartConversation(_ context.Context, title string, ta
 func (f *fakeConversation) AppendMessage(_ context.Context, _ string, _ string, content string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.appendErr != nil {
+		return f.appendErr
+	}
 	f.messages = append(f.messages, content)
 	return nil
+}
+
+func TestRunnerPersistedAttachmentSuppressesFreshRunnerReplay(t *testing.T) {
+	caller := &fakeCaller{result: CallResult{Text: "report"}}
+	conv := &fakeConversation{}
+	runner, _, events := newTestRunner(t, caller, conv)
+	op := failedOp("op_replayed_attachment")
+	runner.OnFailed(context.Background(), op, []api.OperationEvent{{
+		OperationID: op.ID, State: orailtypes.OperationFailed,
+		Message: EventNameDiagnosisAttached + " diagnosis_id=conv_existing",
+	}})
+	if caller.calls() != 0 || conv.startedCount() != 0 || len(events.snapshot()) != 0 {
+		t.Fatal("a durable completed attachment triggered another paid report")
+	}
+}
+
+func TestRunnerNeverAttachesIncompleteReport(t *testing.T) {
+	for _, phase := range []string{"start", "message"} {
+		t.Run(phase, func(t *testing.T) {
+			caller := &fakeCaller{result: CallResult{Text: "report"}}
+			conv := &fakeConversation{}
+			if phase == "start" {
+				conv.startErr = errors.New("store unavailable")
+			} else {
+				conv.appendErr = errors.New("store unavailable")
+			}
+			runner, meta, events := newTestRunner(t, caller, conv)
+			op := failedOp("op_incomplete_report")
+			runner.OnFailed(context.Background(), op, nil)
+			if _, ok := meta.lookup(op.ID); ok || len(events.snapshot()) != 0 {
+				t.Fatal("an incomplete report acquired a diagnosis attachment")
+			}
+		})
+	}
+}
+
+func TestRunnerRedactsFailureReasonAndEventsBeforeModel(t *testing.T) {
+	caller := &fakeCaller{result: CallResult{Text: "report"}}
+	runner, _, _ := newTestRunner(t, caller, &fakeConversation{})
+	op := failedOp("op_redacted_context")
+	op.Reason = "API_KEY=do-not-export-reason"
+	runner.OnFailed(context.Background(), op, []api.OperationEvent{{Message: "PASSWORD=do-not-export-event"}})
+	request, ok := caller.lastRequest()
+	if !ok || strings.Contains(request.Messages[0].Content, "do-not-export") {
+		t.Fatal("outbound context retained credential assignments")
+	}
 }
 
 func (f *fakeConversation) startedCount() int {

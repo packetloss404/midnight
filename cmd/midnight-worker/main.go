@@ -16,8 +16,6 @@ import (
 
 	dockervolume "github.com/moby/moby/api/types/volume"
 
-	"github.com/midnight/midnight/internal/agent/claude"
-	"github.com/midnight/midnight/internal/agent/conversation"
 	"github.com/midnight/midnight/internal/agent/diagnosis"
 	"github.com/midnight/midnight/internal/agent/tools"
 	"github.com/midnight/midnight/internal/api"
@@ -153,6 +151,8 @@ type workerConfig struct {
 	LeaseTTL           time.Duration
 	UsageReconcile     workerUsageReconcileConfig
 	SkipMigrations     bool
+	AuditCheckpoints   bool
+	AuditKeyPath       string
 }
 
 type workerUsageReconcileConfig struct {
@@ -175,6 +175,8 @@ func runServe(args []string) error {
 
 func parseWorkerConfig(args []string) (workerConfig, error) {
 	cfg := workerConfig{
+		AuditCheckpoints:   true,
+		AuditKeyPath:       envFirst(audit.DefaultSigningKeyFile, "MIDNIGHT_AUDIT_SIGNING_KEY_PATH"), // not-a-failure-code
 		WorkerID:           envFirst(defaultWorkerID, "MIDNIGHT_WORKER_ID"),
 		PostgresDSN:        envFirst("", pg.EnvDSN, "MIDNIGHT_DATABASE_URL"),
 		PostgresDSNFile:    envFirst(pg.DefaultDSNFile, pg.EnvDSNFile),
@@ -243,7 +245,16 @@ func parseWorkerConfig(args []string) (workerConfig, error) {
 			WorkspaceBatch: envInt(defaultWorkerUsageReconcileWorkspaceBatch, "MIDNIGHT_WORKER_USAGE_RECONCILE_WORKSPACE_BATCH"),
 		},
 	}
+	if raw := strings.TrimSpace(os.Getenv("MIDNIGHT_AUDIT_CHECKPOINT_ENABLED")); raw != "" { // not-a-failure-code
+		value, err := strconv.ParseBool(raw)
+		if err != nil {
+			return workerConfig{}, errors.New("MIDNIGHT_AUDIT_CHECKPOINT_ENABLED must be true or false")
+		}
+		cfg.AuditCheckpoints = value
+	}
 	fs := flag.NewFlagSet("midnight-worker serve", flag.ContinueOnError)
+	fs.BoolVar(&cfg.AuditCheckpoints, "audit-checkpoints", cfg.AuditCheckpoints, "create signed audit checkpoints at UTC midnight and catch up on startup")
+	fs.StringVar(&cfg.AuditKeyPath, "audit-signing-key-file", cfg.AuditKeyPath, "durable mode-0600 audit signing key file")
 	fs.StringVar(&cfg.WorkerID, "worker-id", cfg.WorkerID, "stable worker process id")
 	fs.StringVar(&cfg.PostgresDSN, "postgres-dsn", cfg.PostgresDSN, "Postgres DSN (default: $MIDNIGHT_DB_DSN)")
 	fs.StringVar(&cfg.PostgresDSNFile, "postgres-dsn-file", cfg.PostgresDSNFile, "Postgres DSN file (default: $MIDNIGHT_DB_DSN_FILE or /etc/midnight/db.dsn)")
@@ -326,6 +337,9 @@ func parseWorkerConfig(args []string) (workerConfig, error) {
 	}
 	if cfg.DeployConcurrency < 1 {
 		return workerConfig{}, errors.New("deploy concurrency must be at least 1")
+	}
+	if cfg.AuditCheckpoints && !filepath.IsAbs(cfg.AuditKeyPath) {
+		return workerConfig{}, errors.New("audit signing key path must be absolute")
 	}
 	if _, err := scheduler.ParseSelector(cfg.SchedulerBackend); err != nil {
 		return workerConfig{}, fmt.Errorf("scheduler backend %q: %w (valid: local, multihost)", cfg.SchedulerBackend, err)
@@ -528,6 +542,11 @@ func serveWorker(ctx context.Context, cfg workerConfig) error {
 			return fmt.Errorf("apply migrations: %w", err)
 		}
 	}
+	stopAuditCheckpoints, err := startWorkerAuditCheckpoints(ctx, pool, cfg)
+	if err != nil {
+		return err
+	}
+	defer stopAuditCheckpoints()
 	usageReconciler := metering.NewPostgresStore(pool)
 	go runWorkerUsageReconciler(ctx, usageReconciler, cfg.UsageReconcile, func(result metering.ScheduledReconcileResult, err error) {
 		if err != nil {
@@ -1910,10 +1929,10 @@ func registerWorkerLifecycleObservers(store *api.ObservedOperationStore, pool *p
 	}
 	opts := diagnosis.Options{}
 	if enabled := diagnosis.NewRunner(diagnosis.Options{}).Enabled(); enabled {
-		caller, err := claude.NewCaller(claude.Options{
-			DefaultModel: os.Getenv(diagnosis.EnvModel),
-			Registry:     tools.NewDefaultRegistry(),
-		})
+		// Context is rendered from bounded durable reads. This written report
+		// needs no tool registry or mutation capability.
+		caller, model, err := newWorkerDiagnosisCaller(tools.New())
+		opts.Model = model
 		switch {
 		case err != nil:
 			fmt.Fprintf(os.Stderr,
@@ -1924,20 +1943,12 @@ func registerWorkerLifecycleObservers(store *api.ObservedOperationStore, pool *p
 				"build-failure diagnosis is enabled (%s) but no database pool is available; diagnosis will not run\n",
 				diagnosis.EnvEnabled)
 		default:
-			diagnosisCaller, adapterErr := diagnosis.NewAgentCaller(caller, diagnosis.AgentCallerOptions{})
-			if adapterErr != nil {
-				fmt.Fprintf(os.Stderr, "build-failure diagnosis caller adapter failed: %v\n", adapterErr)
+			wired, wiringErr := workerDiagnosisOptions(pool, store, caller, model)
+			if wiringErr != nil {
+				fmt.Fprintf(os.Stderr, "build-failure diagnosis persistence wiring failed: %v\n", wiringErr)
 				break
 			}
-			service, svcErr := conversation.NewService(conversation.Config{
-				Store: conversation.NewPostgresStore(pool),
-			})
-			if svcErr != nil {
-				fmt.Fprintf(os.Stderr, "build-failure diagnosis conversation store failed: %v\n", svcErr)
-				break
-			}
-			opts.Caller = diagnosisCaller
-			opts.Conversations = diagnosis.NewConversationStore(service, "agent:diagnosis", diagnosis.EffectiveDiagnosisModel())
+			opts = wired
 		}
 	}
 	runner := diagnosis.NewRunner(opts)

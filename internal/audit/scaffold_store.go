@@ -60,14 +60,16 @@ type DrainConfig struct {
 }
 
 type Evidence struct {
-	SchemaVersion string        `json:"schema_version"`
-	Status        string        `json:"status"`
-	EventCount    int           `json:"event_count"`
-	FirstRowHash  string        `json:"first_row_hash,omitempty"`
-	LastRowHash   string        `json:"last_row_hash,omitempty"`
-	DrainCount    int           `json:"drain_count"`
-	Drains        []DrainConfig `json:"drains"`
-	GeneratedAt   time.Time     `json:"generated_at"`
+	SchemaVersion   string        `json:"schema_version"`
+	Status          string        `json:"status"`
+	EventCount      int           `json:"event_count"`
+	FirstRowHash    string        `json:"first_row_hash,omitempty"`
+	LastRowHash     string        `json:"last_row_hash,omitempty"`
+	DrainCount      int           `json:"drain_count"`
+	Drains          []DrainConfig `json:"drains"`
+	GeneratedAt     time.Time     `json:"generated_at"`
+	Verification    *VerifyReport `json:"verification,omitempty"`
+	CheckpointCount int           `json:"checkpoint_count"`
 }
 
 type ExportManifest struct {

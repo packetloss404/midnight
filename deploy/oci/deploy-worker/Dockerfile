@@ -30,6 +30,9 @@ RUN apt-get update \
     && git --version
 
 WORKDIR /workspace
+# Docker populates a fresh named volume from this directory. Its default0755
+# root would be correctly refused by the private audit signing-key loader.
+RUN install -d -m 0700 /var/lib/midnight/audit
 ENV PATH=/usr/local/go/bin:/go/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
 # Runs as root: the worker needs the bind-mounted /var/run/docker.sock, and the

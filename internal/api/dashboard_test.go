@@ -974,7 +974,7 @@ func TestDashboardAuditFeedsReadAuditChain(t *testing.T) {
 	if evidenceRR.Code != http.StatusOK {
 		t.Fatalf("evidence status = %d body=%s", evidenceRR.Code, evidenceRR.Body.String())
 	}
-	if body := evidenceRR.Body.String(); !strings.Contains(body, `"event_count":1`) || !strings.Contains(body, `"status":"ready"`) {
+	if body := evidenceRR.Body.String(); !strings.Contains(body, `"event_count":1`) || !strings.Contains(body, `"status":"needs-review"`) || !strings.Contains(body, `"signature_status":"unsigned"`) {
 		t.Fatalf("evidence body missing chain summary: %s", body)
 	}
 

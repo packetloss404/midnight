@@ -68,6 +68,15 @@ type AuditChain interface {
 // ErrNoCheckpoints signals that the chain has no signed checkpoints yet.
 var ErrNoCheckpoints = errors.New("audit: no checkpoints recorded")
 
+var ErrCheckpointConflict = errors.New("audit: checkpoint predecessor or coverage changed")
+
+func validateCheckpointSuccessor(cp, previous Checkpoint) error {
+	if cp.PrevCheckpointID != previous.ID || cp.FirstRowID != previous.LastRowID+1 || cp.LastRowID < cp.FirstRowID || len(cp.LastRowHash) != sha256.Size || cp.EndedAt.Before(cp.StartedAt) {
+		return ErrCheckpointConflict
+	}
+	return nil
+}
+
 // Query bounds a chain read.
 type Query struct {
 	// SinceID returns rows with Sequence > SinceID.

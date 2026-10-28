@@ -189,17 +189,22 @@ export async function reissueIdentityInvitation(
   return validateCredentialResult(scope, result);
 }
 
-export function revokeIdentityInvitation(
+export async function revokeIdentityInvitation(
   scope: InvitationScope,
   invitationId: string,
+  expectedVersion: number,
   idempotencyKey = mutationKey("identity-invitation-revoke"),
 ): Promise<void> {
+  const path = `${invitationPath(invitationId)}?${scopeQuery(scope)}`;
+  if (!Number.isSafeInteger(expectedVersion) || expectedVersion < 1) {
+    throw new Error("Reload invitation metadata before revoking it.");
+  }
   return apiFetch<void>(
-    `${invitationPath(invitationId)}?${scopeQuery(scope)}`,
+    path,
     {
       auth: "human",
       method: "DELETE",
-      headers: { "Idempotency-Key": idempotencyKey },
+      headers: { "Idempotency-Key": idempotencyKey, "If-Match": `"${expectedVersion}"` },
     },
   );
 }
@@ -288,9 +293,9 @@ export function useReissueIdentityInvitation(scope: InvitationScope) {
 
 export function useRevokeIdentityInvitation(scope: InvitationScope) {
   const queryClient = useQueryClient();
-  return useMutation<void, Error, string>({
-    mutationFn: (invitationId) =>
-      revokeIdentityInvitation(scope, invitationId),
+  return useMutation<void, Error, { invitationId: string; expectedVersion: number }>({
+    mutationFn: ({ invitationId, expectedVersion }) =>
+      revokeIdentityInvitation(scope, invitationId, expectedVersion),
     onSuccess: () => {
       void queryClient.invalidateQueries({
         queryKey: identityInvitationKeys.list(scope),

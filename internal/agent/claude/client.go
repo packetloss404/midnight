@@ -122,9 +122,16 @@ func NewCaller(opts Options) (agent.Caller, error) {
 		return nil, agent.AgentAPIKeyMissing
 	}
 
-	clientOpts := []option.RequestOption{option.WithAPIKey(apiKey)}
-	if opts.BaseURL != "" {
-		clientOpts = append(clientOpts, option.WithBaseURL(opts.BaseURL))
+	// Credential resolution above is complete. SDK environment defaults can
+	// otherwise add ANTHROPIC_AUTH_TOKEN alongside our explicit API key,
+	// forwarding that unrelated bearer credential to a compatible provider.
+	clientOpts := []option.RequestOption{option.WithoutEnvironmentDefaults(), option.WithAPIKey(apiKey)}
+	baseURL := opts.BaseURL
+	if baseURL == "" {
+		baseURL = os.Getenv("ANTHROPIC_BASE_URL") // not-a-failure-code
+	}
+	if baseURL != "" {
+		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
 	if opts.HTTPClient != nil {
 		clientOpts = append(clientOpts, option.WithHTTPClient(opts.HTTPClient))

@@ -250,7 +250,7 @@ function TokenManager({ projectId }: { projectId: string }) {
         }}
         onConfirm={async () => {
           if (!revokeTarget) return;
-          await revokeToken.mutateAsync(revokeTarget.id);
+          await revokeToken.mutateAsync({ tokenId: revokeTarget.id, expectedVersion: revokeTarget.resource_version });
           setRevokeTarget(null);
           revokeToken.reset();
         }}

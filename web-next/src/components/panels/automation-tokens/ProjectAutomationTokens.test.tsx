@@ -308,7 +308,7 @@ describe("ProjectAutomationTokens", () => {
       within(dialog).getByRole("button", { name: "Revoke token" }),
     );
     await waitFor(() =>
-      expect(state.revoke.mutateAsync).toHaveBeenCalledWith("sat_active"),
+      expect(state.revoke.mutateAsync).toHaveBeenCalledWith({ tokenId: "sat_active", expectedVersion: 1 }),
     );
     expect(
       screen.queryByRole("dialog", { name: "Revoke automation token?" }),

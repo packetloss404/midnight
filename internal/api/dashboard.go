@@ -1494,6 +1494,7 @@ func dashboardCompatibilityMatrixHandler(w http.ResponseWriter, r *http.Request)
 
 type auditChainDashboardSource struct {
 	chain audit.AuditChain
+	keys  audit.VerifyingKeyProvider
 }
 
 func newAuditChainDashboardSource(chain audit.AuditChain) auditChainDashboardSource {
@@ -1501,17 +1502,34 @@ func newAuditChainDashboardSource(chain audit.AuditChain) auditChainDashboardSou
 }
 
 func (source auditChainDashboardSource) Evidence(ctx context.Context, now time.Time) (audit.Evidence, error) {
-	rows, err := source.rows(ctx, 0)
+	snapshot, err := audit.ReadSnapshot(ctx, source.chain)
 	if err != nil {
 		return audit.Evidence{}, err
 	}
+	rows := snapshot.Rows
+	var keys []audit.VerifyingKey
+	var trustErr error
+	if source.keys != nil {
+		keys, trustErr = source.keys.VerifyingKeys(ctx)
+	}
+	report, err := audit.Verify(ctx, snapshot.Source(), keys)
+	if err != nil {
+		return audit.Evidence{}, err
+	}
+	if trustErr != nil {
+		report.Outcome = audit.OutcomeSourceError
+		report.Status, report.SignatureStatus, report.Valid = "failed", "failed", false
+		report.Breaks = append(report.Breaks, audit.Break{Kind: "trust_read", Detail: trustErr.Error()})
+	}
 	evidence := audit.Evidence{
-		SchemaVersion: audit.LedgerSchemaVersion,
-		Status:        "empty",
-		EventCount:    len(rows),
-		DrainCount:    0,
-		Drains:        []audit.DrainConfig{},
-		GeneratedAt:   now.UTC(),
+		SchemaVersion:   audit.LedgerSchemaVersion,
+		Status:          "empty",
+		EventCount:      len(rows),
+		DrainCount:      0,
+		Drains:          []audit.DrainConfig{},
+		GeneratedAt:     now.UTC(),
+		Verification:    &report,
+		CheckpointCount: len(snapshot.Checkpoints),
 	}
 	if now.IsZero() {
 		evidence.GeneratedAt = time.Now().UTC()
@@ -1520,6 +1538,9 @@ func (source auditChainDashboardSource) Evidence(ctx context.Context, now time.T
 		evidence.Status = "ready"
 		evidence.FirstRowHash = auditRowHash(rows[0].RowHash)
 		evidence.LastRowHash = auditRowHash(rows[len(rows)-1].RowHash)
+	}
+	if !report.Valid || (len(rows) > 0 && report.SignatureStatus == "unsigned") {
+		evidence.Status = "needs-review"
 	}
 	return evidence, nil
 }
@@ -1555,10 +1576,6 @@ func (source auditChainDashboardSource) Drains(context.Context) ([]audit.DrainCo
 }
 
 func (source auditChainDashboardSource) Export(ctx context.Context, now time.Time) ([]byte, audit.ExportManifest, error) {
-	rows, err := source.rows(ctx, 0)
-	if err != nil {
-		return nil, audit.ExportManifest{}, err
-	}
 	if source.chain == nil {
 		stream := make([]byte, 0)
 		sum := sha256.Sum256(stream)
@@ -1571,8 +1588,13 @@ func (source auditChainDashboardSource) Export(ctx context.Context, now time.Tim
 		}
 		return stream, manifest, nil
 	}
+	snapshot, err := audit.ReadSnapshot(ctx, source.chain)
+	if err != nil {
+		return nil, audit.ExportManifest{}, err
+	}
+	rows := snapshot.Rows
 	dst := audit.NewMemoryDestination("dashboard-audit-export")
-	canonical, err := audit.NewExporter(source.chain).Export(ctx, dst)
+	canonical, err := audit.ExportSnapshot(ctx, dst, snapshot)
 	if err != nil {
 		return nil, audit.ExportManifest{}, err
 	}
