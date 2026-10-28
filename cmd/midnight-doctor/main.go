@@ -97,12 +97,12 @@ func run(args []string, stdout, stderr io.Writer) error {
 		backupDestHint preflight.BackupDestinationHint
 	)
 	fs.BoolVar(&jsonOutput, "json", false, "emit machine-readable JSON output")
-	fs.BoolVar(&live, "live", false, "enable live host probes (also enabled by MIDNIGHT_DOCTOR_LIVE=1)")
+	fs.BoolVar(&live, "live", false, "enable bounded cgroup/Docker version probes and installed package paths; other host checks need captured facts/hints (also MIDNIGHT_DOCTOR_LIVE=1)")
 	fs.BoolVar(&mvpReadiness, "mvp-readiness", false, "run only the MVP operator readiness checks (no deploy is executed)")
 	fs.BoolVar(&installReady, "install-readiness", false, "run only the package install-path readiness checks")
 	fs.StringVar(&check, "check", "", "comma-separated list of OR-CHK-DOC ids to filter on")
 	fs.StringVar(&fix, "fix", "", "reserved safe-fix mode: safe|all (currently returns an explicit unsupported error)")
-	fs.StringVar(&hostSource, "hostsource", "", "host-fact source override: `live` (default behavior) or `fixture:<dir>` to load the canonical fixture set from <dir> (mountinfo, daemon.json, docker-version.txt, midnight.env, db.dsn, systemd/, ss-ltn.txt, hints.json). Individual --*-fixture flags still take precedence and live host probing is unchanged. Used by the disposable-VM CI harness.")
+	fs.StringVar(&hostSource, "hostsource", "", "host-fact source: `live` (requires --live to run commands) or `fixture:<dir>` for captured mountinfo, daemon.json, docker-version.txt, midnight.env, db.dsn, systemd/, ss-ltn.txt and hints.json. Fixture bundles disable live commands and installed-path defaults. Individual --*-fixture flags take precedence.")
 	fs.StringVar(&mountInfoPath, "mountinfo-fixture", "", "path to a mountinfo fixture for OR-CHK-DOC-001 (cgroup v2)")
 	fs.StringVar(&daemonJSONPath, "daemon-json-fixture", "", "path to a daemon.json fixture for OR-CHK-DOC-002")
 	fs.StringVar(&dockerVerPath, "docker-version-fixture", "", "path to `docker version` text for OR-CHK-DOC-003")
@@ -148,6 +148,9 @@ func run(args []string, stdout, stderr io.Writer) error {
 		return &exitError{code: 3}
 	}
 	if bundle != nil {
+		// A complete fixture source must never fall through to host commands
+		// or installed configuration, even when --live is also supplied.
+		live = false
 		if mountInfoPath == "" {
 			mountInfoPath = bundle.mountInfo
 		}
@@ -272,14 +275,20 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	if !explicitFlags["db-dsn-configured"] && !dbDSNEnv {
-		dbDSNEnv = processEnvPresent("MIDNIGHT_DB_DSN", "MIDNIGHT_DATABASE_URL") || packageDSNConfigured
+		dbDSNEnv = (bundle == nil && processEnvPresent("MIDNIGHT_DB_DSN", "MIDNIGHT_DATABASE_URL")) || packageDSNConfigured
+	}
+	resolvePath := func(current string, explicit bool, envNames, packageNames []string, fallback string) string {
+		if bundle != nil {
+			return current
+		}
+		return resolveDoctorString(current, explicit, envNames, packageValues, packageNames, fallback)
 	}
 	workerID = resolveDoctorString(workerID, explicitFlags["worker-id"], []string{"MIDNIGHT_WORKER_ID"}, packageValues, []string{"MIDNIGHT_WORKER_ID"}, "midnight-worker")
 	workerBackend = resolveDoctorString(workerBackend, explicitFlags["worker-runtime-backend"], []string{"MIDNIGHT_WORKER_RUNTIME_BACKEND"}, packageValues, []string{"MIDNIGHT_WORKER_RUNTIME_BACKEND"}, "")
 	workerDocker = resolveDoctorString(workerDocker, explicitFlags["worker-docker-host"], []string{"MIDNIGHT_WORKER_DOCKER_HOST", "DOCKER_HOST"}, packageValues, []string{"MIDNIGHT_WORKER_DOCKER_HOST", "DOCKER_HOST"}, "")
 	workerAgentID = resolveDoctorString(workerAgentID, explicitFlags["worker-agent-id"], []string{"MIDNIGHT_WORKER_AGENT_ID", "MIDNIGHT_AGENT_ID"}, packageValues, []string{"MIDNIGHT_WORKER_AGENT_ID", "MIDNIGHT_AGENT_ID"}, "")
 	workerHostID = resolveDoctorString(workerHostID, explicitFlags["worker-host-id"], []string{"MIDNIGHT_WORKER_HOST_ID", "MIDNIGHT_HOST_ID"}, packageValues, []string{"MIDNIGHT_WORKER_HOST_ID", "MIDNIGHT_HOST_ID"}, "")
-	routeConfigDir = resolveDoctorString(routeConfigDir, explicitFlags["route-config-dir"], []string{"MIDNIGHT_WORKER_ROUTE_CONFIG_DIR"}, packageValues, []string{"MIDNIGHT_WORKER_ROUTE_CONFIG_DIR"}, liveDefault(live, "/etc/midnight/traefik/dynamic"))
+	routeConfigDir = resolvePath(routeConfigDir, explicitFlags["route-config-dir"], []string{"MIDNIGHT_WORKER_ROUTE_CONFIG_DIR"}, []string{"MIDNIGHT_WORKER_ROUTE_CONFIG_DIR"}, liveDefault(live, "/etc/midnight/traefik/dynamic"))
 	routeGroup = resolveDoctorString(routeGroup, explicitFlags["route-group"], []string{"MIDNIGHT_WORKER_ROUTE_GROUP"}, packageValues, []string{"MIDNIGHT_WORKER_ROUTE_GROUP"}, "default")
 	routeHost = resolveDoctorString(routeHost, explicitFlags["route-public-host"], []string{"MIDNIGHT_WORKER_ROUTE_PUBLIC_HOST"}, packageValues, []string{"MIDNIGHT_WORKER_ROUTE_PUBLIC_HOST"}, "")
 	routePath = resolveDoctorString(routePath, explicitFlags["route-public-path"], []string{"MIDNIGHT_WORKER_ROUTE_PUBLIC_PATH"}, packageValues, []string{"MIDNIGHT_WORKER_ROUTE_PUBLIC_PATH"}, "/")
@@ -295,10 +304,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 	// Retain no credential-bearing destination after resolving readiness.
 	backupDestURI = ""
-	dbDSNPath = resolveDoctorString(dbDSNPath, explicitFlags["db-dsn-fixture"], []string{"MIDNIGHT_DB_DSN_FILE"}, packageValues, []string{"MIDNIGHT_DB_DSN_FILE"}, liveDefault(live, "/etc/midnight/db.dsn"))
-	cursorKeyPath = resolveDoctorString(cursorKeyPath, explicitFlags["cursor-key-fixture"], []string{"MIDNIGHT_CURSOR_KEY_PATH"}, packageValues, []string{"MIDNIGHT_CURSOR_KEY_PATH"}, liveDefault(live, "/etc/midnight/cursor.key"))
-	registryConfig = resolveDoctorString(registryConfig, explicitFlags["registry-config-fixture"], []string{"MIDNIGHT_REGISTRY_CONFIG"}, packageValues, []string{"MIDNIGHT_REGISTRY_CONFIG"}, liveDefault(live, "/etc/midnight/registry.yml"))
-	systemdUnitDir = resolveDoctorString(systemdUnitDir, explicitFlags["systemd-unit-dir"], []string{"MIDNIGHT_SYSTEMD_UNIT_DIR"}, packageValues, nil, liveDefault(live, "/lib/systemd/system"))
+	dbDSNPath = resolvePath(dbDSNPath, explicitFlags["db-dsn-fixture"], []string{"MIDNIGHT_DB_DSN_FILE"}, []string{"MIDNIGHT_DB_DSN_FILE"}, liveDefault(live, "/etc/midnight/db.dsn"))
+	cursorKeyPath = resolvePath(cursorKeyPath, explicitFlags["cursor-key-fixture"], []string{"MIDNIGHT_CURSOR_KEY_PATH"}, []string{"MIDNIGHT_CURSOR_KEY_PATH"}, liveDefault(live, "/etc/midnight/cursor.key"))
+	registryConfig = resolvePath(registryConfig, explicitFlags["registry-config-fixture"], []string{"MIDNIGHT_REGISTRY_CONFIG"}, []string{"MIDNIGHT_REGISTRY_CONFIG"}, liveDefault(live, "/etc/midnight/registry.yml"))
+	systemdUnitDir = resolvePath(systemdUnitDir, explicitFlags["systemd-unit-dir"], []string{"MIDNIGHT_SYSTEMD_UNIT_DIR"}, nil, liveDefault(live, "/lib/systemd/system"))
 
 	if !explicitFlags["route-public-tls"] && !routeTLS {
 		routeTLS, err = resolveDoctorBool("MIDNIGHT_WORKER_ROUTE_PUBLIC_TLS", packageValues, false)
@@ -314,7 +323,7 @@ func run(args []string, stdout, stderr io.Writer) error {
 			return &exitError{code: 3}
 		}
 	}
-	if runtimeBinsCSV == "" && !explicitFlags["runtime-binaries"] {
+	if bundle == nil && runtimeBinsCSV == "" && !explicitFlags["runtime-binaries"] {
 		runtimeBinsCSV = strings.Join([]string{
 			resolveDoctorString("", false, []string{"MIDNIGHT_BUILDKITD_BIN"}, packageValues, []string{"MIDNIGHT_BUILDKITD_BIN"}, liveDefault(live, "buildkitd")),
 			resolveDoctorString("", false, []string{"MIDNIGHT_BUILDCTL"}, packageValues, []string{"MIDNIGHT_BUILDCTL"}, liveDefault(live, "buildctl")),
@@ -323,7 +332,8 @@ func run(args []string, stdout, stderr io.Writer) error {
 	}
 
 	source := preflight.HostSource{
-		Reader: preflight.OSFileReader{},
+		Reader:           preflight.OSFileReader{},
+		FixturePathsOnly: bundle != nil,
 		Paths: preflight.HostPaths{
 			MountInfo:        mountInfoPath,
 			DockerDaemonJSON: daemonJSONPath,
@@ -358,6 +368,10 @@ func run(args []string, stdout, stderr io.Writer) error {
 			WorkerRouteTargetPort:   routePort,
 			BackupDestination:       backupDestHint,
 		},
+	}
+
+	if live {
+		source = doctor.NewLiveHostSource(source)
 	}
 
 	var filter []string

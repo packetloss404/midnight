@@ -48,7 +48,12 @@ test("keeps resources interactive beside the desktop service inspector", async (
     page.getByRole("complementary", { name: "Worker" }),
   ).toBeHidden();
   await expect(page).toHaveURL(
-    /\/projects\/project_gate0\?env=env_production$/,
+    /\/projects\/project_gate0\/services\/svc_worker\/overview\?env=env_production$/,
+  );
+  await page.getByRole("button", { name: "Collapse panel", exact: true }).click();
+  await expect(page.getByRole("complementary", { name: "Worker" })).toBeVisible();
+  await expect(page).toHaveURL(
+    /\/projects\/project_gate0\/services\/svc_worker\/overview\?env=env_production$/,
   );
 });
 

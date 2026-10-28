@@ -25,6 +25,7 @@ Midnight doctor checks use stable IDs so installer, support bundle, and runbook 
 | `OR-CHK-DOC-017` | fatal | worker route environment is coherent for the live deploy check |
 | `OR-CHK-DOC-018` | fatal | package environment file is readable for systemd units |
 | `OR-CHK-DOC-019` | fatal | required systemd units are present and loadable |
+| `OR-CHK-DOC-020` | warn | configured off-host backup destination has a supported URI scheme |
 
 The disposable-VM alpha floor currently asserts `OR-CHK-DOC-001..009`
 on the fresh-host path because those checks cover the host/runtime
@@ -47,26 +48,28 @@ are omitted instead of being represented as misleading skips. Use that file to
 see what the package observed, then run an explicit operator check with the
 host facts you want to rely on.
 
-For the host preflight checks, the current CLI is fixture/hint driven.
-It does not automatically run `docker version` or `ss -ltn` unless
-caller wiring supplies those captured outputs or a command runner. A
-typical operator capture looks like:
+With `--live`, cgroup and Docker API checks run the fixed read-only commands
+`stat -fc %T /sys/fs/cgroup` and
+`docker version --format '{{.Server.APIVersion}}'`, each with a three-second
+deadline. Explicit captured-file inputs override those probes. Without `--live`,
+no command runner is installed. `--hostsource=fixture:<dir>` disables live
+commands and installed-path defaults even if `--live` is also supplied. Missing
+bundle files do not fall back to environment or captured package-config paths,
+including runtime binary paths. Explicit path flags and runtime binary hints
+remain supported for deliberately selected captured inputs.
+
+Ingress listeners still require captured `ss -ltn` output. Firewall, MAC,
+time-sync, and Docker-package checks require facts verified by the operator;
+missing hints remain skips. A read-only diagnostic subset can be run as follows:
 
 ```sh
-docker version --format '{{.Server.APIVersion}}' \
-  | sudo tee /tmp/midnight-docker-api.txt >/dev/null
-ss -ltn | sudo tee /tmp/midnight-ss-ltn.txt >/dev/null
+capture_dir="$(mktemp -d)"
+trap 'rm -f "$capture_dir/ss-ltn.txt"; rmdir "$capture_dir"' EXIT
+ss -ltn > "$capture_dir/ss-ltn.txt"
 
 sudo midnight-doctor --json --live \
-  --mountinfo-fixture=/proc/self/mountinfo \
-  --daemon-json-fixture=/etc/docker/daemon.json \
-  --docker-version-fixture=/tmp/midnight-docker-api.txt \
-  --ss-ltn-fixture=/tmp/midnight-ss-ltn.txt \
-  --firewall-mode=ufw \
-  --mac-mode=apparmor-enforce \
-  --time-sync=synchronized \
-  --hostname-fqdn="$(hostname -f)" \
-  --docker-packages=docker-ce
+  --check=OR-CHK-DOC-001,OR-CHK-DOC-002,OR-CHK-DOC-003,OR-CHK-DOC-004,OR-CHK-DOC-005,OR-CHK-DOC-006,OR-CHK-DOC-007,OR-CHK-DOC-008,OR-CHK-DOC-009,OR-CHK-DOC-010,OR-CHK-DOC-011,OR-CHK-DOC-012,OR-CHK-DOC-013,OR-CHK-DOC-014,OR-CHK-DOC-017,OR-CHK-DOC-018,OR-CHK-DOC-019,OR-CHK-DOC-020 \
+  --ss-ltn-fixture="$capture_dir/ss-ltn.txt"
 ```
 
 Use the firewall, MAC, time-sync, hostname, and Docker-package hints
@@ -74,9 +77,17 @@ that match the host. On Debian 12 the package policy is the same as on
 Ubuntu 24.04: upstream `docker-ce` or compatible Docker Engine is
 expected, and distro `docker.io` is a fatal finding.
 
-The `--live` flag tells the CLI to use default package paths for
-`OR-CHK-DOC-010..013`; it still relies on the explicit captured host
-facts above for checks such as Docker API and ingress sockets. To make
+The default full registry and install/MVP profiles include `OR-CHK-DOC-015`,
+which creates and removes a temporary directory inside the route publication
+root to test writability. Use an explicit subset, as above, when runtime
+directories must remain unchanged. A zero exit code can include skipped checks;
+inspect each result rather than treating it as proof of complete host health.
+The optional `TestLiveDoctorOnHost` canary proves only the actual cgroup/Docker
+read probes and fails if either probe skips or fails; it does not prove installed
+service readiness.
+
+The `--live` flag also uses default package paths for
+`OR-CHK-DOC-010..013`. To make
 the package-boot checks pass, provide or verify these inputs before the
 service enablement step:
 

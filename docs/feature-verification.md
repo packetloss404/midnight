@@ -191,6 +191,12 @@ commit-bound evidence.
   image intake through GraphQL and REST reads. OAuth is the operator
   compatibility surface; human login uses sessions. GraphQL subscriptions
   remain later work (`MID-203`).
+- **Live Doctor probes.** The CLI and optional live canary use the same bounded
+  cgroup/Docker command source. The live-runtime CI gate requires both actual
+  read probes to pass; skips fail that gate. This proves probe execution, not
+  full installed-host health. Other checks need installed files, captured
+  listener data or verified operator hints. Complete fixture bundles suppress
+  ambient host-path fallbacks and live commands.
 - **Node agent and observability.** Agent protocol/runtime/supervisor and
   telemetry tests cover desired state, probes, drift, redaction, and explicit
   coverage gaps. The live Traefik lane proves local routing and observed

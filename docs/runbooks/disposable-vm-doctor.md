@@ -166,9 +166,11 @@ sudo midnight-doctor --json --live \
   --docker-packages=docker-ce
 ```
 
-The `--live` flag uses default package paths for `OR-CHK-DOC-010..013`;
-the command still uses explicit captured files for Docker API and
-ingress sockets. Then verify the package-boot inputs that are outside
+The `--live` flag wires fixed read-only cgroup/Docker version commands with
+three-second deadlines and uses default package paths for `OR-CHK-DOC-010..013`;
+the example above supplies captured Docker API and ingress-listener data.
+Without a Docker version file, live mode runs that read probe automatically.
+Then verify the package-boot inputs that are outside
 the disposable harness floor:
 
 - `OR-CHK-DOC-010`: configure `MIDNIGHT_DB_DSN` or

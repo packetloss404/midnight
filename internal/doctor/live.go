@@ -278,6 +278,37 @@ type LiveOptions struct {
 	HostnameFixture string
 }
 
+// NewLiveHostSource opts into the bounded, fixed-argv OS probes already
+// allow-listed by preflight. Constructing a source performs no I/O. Explicit
+// paths/readers/runners remain authoritative, including captured fact files.
+// Hint-only checks are not populated with assumed healthy values.
+func NewLiveHostSource(source preflight.HostSource) preflight.HostSource {
+	if source.Reader == nil {
+		source.Reader = preflight.OSFileReader{}
+	}
+	if source.Runner == nil {
+		source.Runner = preflight.OSCommandRunner{}
+	}
+	defaults := []struct {
+		target *string
+		value  string
+	}{
+		{&source.Paths.DockerDaemonJSON, "/etc/docker/daemon.json"},
+		{&source.Paths.PackageEnv, "/etc/midnight/midnight.env"},
+		{&source.Paths.DatabaseDSN, "/etc/midnight/db.dsn"},
+		{&source.Paths.CursorKey, "/etc/midnight/cursor.key"},
+		{&source.Paths.RegistryConfig, "/etc/midnight/registry.yml"},
+		{&source.Paths.RouteConfigDir, "/etc/midnight/traefik/dynamic"},
+		{&source.Paths.SystemdUnitDir, "/lib/systemd/system"},
+	}
+	for _, entry := range defaults {
+		if *entry.target == "" {
+			*entry.target = entry.value
+		}
+	}
+	return source
+}
+
 // RunLiveChecks executes the OR-CHK-DOC registry against the supplied
 // HostSource. The returned slice is in registry order; failures do
 // NOT short-circuit so operators see every diagnosis at once.
@@ -437,7 +468,11 @@ func runCheckDockerAPI(ctx context.Context, src preflight.HostSource) Result {
 	if src.Paths.DockerAPIVersion == "" && src.Runner == nil {
 		return Result{Status: StatusSkip, Message: "Docker API probe not configured"}
 	}
-	ok, err := preflight.DockerAPISupportsPhase0FromSource(src)
+	version, err := preflight.DockerAPIVersionFromSourceContext(ctx, src)
+	if err != nil {
+		return Result{Status: StatusConfigError, Err: err}
+	}
+	ok, err := preflight.DockerAPISupportsPhase0(version)
 	if err != nil {
 		return Result{Status: StatusConfigError, Err: err}
 	}
@@ -553,7 +588,7 @@ func runCheckDatabaseDSN(_ context.Context, src preflight.HostSource) Result {
 		return Result{Status: StatusPass, Message: "Postgres DSN is configured via package environment file"}
 	}
 	dsnPath := strings.TrimSpace(src.Paths.DatabaseDSN)
-	if dsnPath == "" {
+	if dsnPath == "" && !src.FixturePathsOnly {
 		dsnPath = strings.TrimSpace(env["MIDNIGHT_DB_DSN_FILE"])
 	}
 	if dsnPath == "" || src.Reader == nil {
@@ -640,7 +675,7 @@ func runCheckWorkerDockerBackend(_ context.Context, src preflight.HostSource) Re
 func runCheckRouteConfigDirWritable(_ context.Context, src preflight.HostSource) Result {
 	env, _ := preflight.PackageEnvValues(src)
 	root := strings.TrimSpace(src.Paths.RouteConfigDir)
-	if root == "" {
+	if root == "" && !src.FixturePathsOnly {
 		root = strings.TrimSpace(env["MIDNIGHT_WORKER_ROUTE_CONFIG_DIR"])
 	}
 	if root == "" {

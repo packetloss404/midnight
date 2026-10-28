@@ -55,15 +55,16 @@ for _ in $(seq 1 60); do
 done
 "$ready" || { echo 'live runtime: BuildKit did not become ready' >&2; exit 1; }
 
-GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 1 -exec "$PWD/scripts/ci/integration-test-exec.sh" \
+MIDNIGHT_DOCTOR_LIVE=1 GOMAXPROCS="${GOMAXPROCS:-4}" go test -p 1 -exec "$PWD/scripts/ci/integration-test-exec.sh" \
   -tags=integration -count=1 -timeout=15m -json \
-  -run '^(TestBuildctlIntegrationProducesDeterministicDigest|TestTraefikDynamicPublicationServesYAML|TestTenantAgentSourceChatBuildKitRuntimeHTTP)$' \
-  ./internal/build ./internal/router ./cmd/midnight-buildkit | tee artifacts/ci-live-runtime/results.jsonl
+  -run '^(TestBuildctlIntegrationProducesDeterministicDigest|TestTraefikDynamicPublicationServesYAML|TestTenantAgentSourceChatBuildKitRuntimeHTTP|TestLiveDoctorOnHost)$' \
+  ./internal/build ./internal/router ./cmd/midnight-buildkit ./internal/doctor | tee artifacts/ci-live-runtime/results.jsonl
 passed=$(jq -r 'select(.Action == "pass" and .Test != null) | .Package + " " + .Test' artifacts/ci-live-runtime/results.jsonl)
 for required_test in \
   'github.com/midnight/midnight/internal/build TestBuildctlIntegrationProducesDeterministicDigest' \
   'github.com/midnight/midnight/internal/router TestTraefikDynamicPublicationServesYAML/LiveHTTP' \
-  'github.com/midnight/midnight/cmd/midnight-buildkit TestTenantAgentSourceChatBuildKitRuntimeHTTP'; do
+  'github.com/midnight/midnight/cmd/midnight-buildkit TestTenantAgentSourceChatBuildKitRuntimeHTTP' \
+  'github.com/midnight/midnight/internal/doctor TestLiveDoctorOnHost'; do
   grep -Fxq -- "$required_test" <<<"$passed" || {
     echo "live runtime: required test did not execute successfully: $required_test" >&2
     exit 1
