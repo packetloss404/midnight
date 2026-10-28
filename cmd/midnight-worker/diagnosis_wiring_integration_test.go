@@ -6,6 +6,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -25,6 +26,7 @@ import (
 	"github.com/midnight/midnight/internal/api"
 	"github.com/midnight/midnight/internal/db/pg"
 	"github.com/midnight/midnight/internal/deploy"
+	"github.com/midnight/midnight/internal/secrets"
 	"github.com/midnight/midnight/migrations"
 	"github.com/midnight/midnight/pkg/orailtypes"
 	tc "github.com/testcontainers/testcontainers-go"
@@ -175,9 +177,35 @@ VALUES (CURRENT_TIMESTAMP,'prj_diagnosis','env_diagnosis','svc_diagnosis','dep_d
 			t.Errorf("persisted lineage %s=%v, want %s", key, conv.Metadata[key], expected)
 		}
 	}
+	// Use the actual installed PostgreSQL stack: diagnosis authorization must
+	// prove its report/operation/deployment lineage against the same durable
+	// resource and identity authority as the canonical API.
+	newTestKey := func() []byte {
+		t.Helper()
+		key := make([]byte, 32)
+		if _, err := rand.Read(key); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { clear(key) })
+		return key
+	}
+	keyProvider, err := secrets.NewMemoryKeyProvider(newTestKey(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack, err := api.NewPostgresDataStack(api.PostgresDataStackConfig{
+		Pool: pool, MigrationsFS: migrations.FS, ManifestPath: "manifest.yaml",
+		CursorSecret: newTestKey(), AgentHMACSecret: newTestKey(),
+		AutomationTokenMACKey: newTestKey(), InvitationMACKey: newTestKey(),
+		VariableIntentMACKey: newTestKey(), VariableKeyProvider: keyProvider,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	stack.APIBearerToken = "qa-operator-read-token"
 	// Exercise the canonical API's installation-operator read contract. Human
 	// instance-admin versus ordinary-tenant access is tested at the router.
-	server := httptest.NewServer(api.NewRouterWithDataStack(api.DataStack{APIBearerToken: "qa-operator-read-token", ConversationStore: store, OperationStore: operations}))
+	server := httptest.NewServer(api.NewRouterWithDataStack(stack))
 	defer server.Close()
 	for _, path := range []string{api.AgentConversationsPrefix + "/" + conversationID, api.AgentConversationsPrefix + "/" + conversationID + "/messages", "/api/v1alpha/operations/op_diagnosis/events"} {
 		req, _ := http.NewRequestWithContext(ctx, http.MethodGet, server.URL+path, nil)

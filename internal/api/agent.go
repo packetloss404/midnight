@@ -539,6 +539,12 @@ func streamConversation(w http.ResponseWriter, r *http.Request, deps AgentConver
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
+	// Some streaming proxies forward response headers only when the first
+	// body chunk arrives. Establish readiness immediately, after subscription,
+	// so clients can POST without waiting for the periodic heartbeat.
+	if _, err := io.WriteString(w, ":connected\n\n"); err != nil {
+		return
+	}
 	flusher.Flush()
 
 	heartbeat := time.NewTicker(15 * time.Second)

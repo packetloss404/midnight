@@ -104,6 +104,8 @@ mutation consent and closes the local stream. This keeps an old conversation
 from appearing under a new target. Closing the stream does not cancel a
 server-side turn already submitted. Conversations carry explicit environment
 scope, and mutation consent remains subject to current server authorization.
+Opening chat from a service hides its inspector while preserving that service's
+URL and context. Closing chat restores the inspector for the same service.
 Expanded width is 440 px; the collapsed control is a floating button.
 
 ### Local mock backend

@@ -46,10 +46,12 @@ export function registerTenantChatTests(context: TenantChatContext) {
       await expect(viewerChat.dock.locator('[data-role="assistant"]').last()).toContainText(admin.serviceId);
       await expect(viewerChat.dock.locator('[data-testid^="tool-call-"]').last()).toHaveAttribute("data-error", "false");
       // The read and tool result are durable after a real browser reload.
+      expect(await viewerPage.evaluate(() => localStorage.getItem("midnight.agent.currentId"))).toBe(viewerChat.id);
       await viewerPage.reload();
-      if (await viewerPage.getByTestId("agent-dock-fab").isVisible()) {
-        await viewerPage.getByTestId("agent-dock-fab").click();
-      }
+      // Session/project authorization is asynchronous after reload. An
+      // immediate isVisible() would skip the still-unmounted collapsed dock.
+      await expect(viewerPage.getByTestId("agent-dock-fab")).toBeVisible();
+      await viewerPage.getByTestId("agent-dock-fab").click();
       await expect(viewerPage.getByTestId("agent-dock").locator('[data-role="assistant"]').last()).toContainText("Browser fixture tool completed:");
 
       const editorChat = await openNewChat(editorPage, admin);
@@ -122,6 +124,12 @@ async function inviteNewHuman(page: Page, token: string, workspaceId: string, pr
 async function openNewChat(page: Page, scope: { projectId: string; serviceId: string; environmentId: string }) {
   await page.goto(`/projects/${scope.projectId}/services/${scope.serviceId}/overview?env=${scope.environmentId}`);
   await page.getByTestId("agent-dock-fab").click();
+  // Selecting the same service restores its inspector without changing the
+  // target URL; reopening chat must still bind this exact service/environment.
+  await page.locator(`[data-service-open="${scope.serviceId}"]`).click();
+  await expect(page.locator(".service-inspector")).toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`/services/${scope.serviceId}/overview`));
+  await page.getByTestId("agent-dock-fab").click();
   const dock = page.getByTestId("agent-dock");
   const created = page.waitForResponse(response => new URL(response.url()).pathname === "/api/v1alpha/agent/conversations" && response.request().method() === "POST");
   await dock.getByRole("button", { name: "New conversation", exact: true }).click();
@@ -138,7 +146,10 @@ async function sendMessage(page: Page, dock: Locator, id: string, content: strin
   await dock.getByTestId("agent-composer-input").fill(content);
   const completed = page.waitForResponse(response => new URL(response.url()).pathname === `/api/v1alpha/agent/conversations/${id}/messages` && response.request().method() === "POST");
   await dock.getByTestId("agent-composer-send").click();
-  const response = await completed;
+  const response = await completed.catch(async () => {
+    const reason = await dock.getByTestId("agent-send-error").innerText().catch(() => "No readable agent error was shown.");
+    throw new Error(`Agent message POST did not complete. ${reason.slice(0, 500)}`);
+  });
   expect(response.status()).toBe(200);
   await expect(dock.getByTestId("agent-composer-input")).toHaveValue("");
   return response;
