@@ -1981,6 +1981,7 @@ const (
 	IDEMPOTENCYKEYREUSEDWITHDIFFERENTBODY ErrorResponseCode = "IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY"
 	IDEMPOTENCYREQUESTINPROGRESS          ErrorResponseCode = "IDEMPOTENCY_REQUEST_IN_PROGRESS"
 	INTERNALERROR                         ErrorResponseCode = "INTERNAL_ERROR"
+	INVITATIONACCOUNTEXISTS               ErrorResponseCode = "INVITATION_ACCOUNT_EXISTS"
 	LOGQUERYINVALID                       ErrorResponseCode = "LOG_QUERY_INVALID"
 	LOGSTOREUNAVAILABLE                   ErrorResponseCode = "LOG_STORE_UNAVAILABLE"
 	METHODNOTALLOWED                      ErrorResponseCode = "METHOD_NOT_ALLOWED"
@@ -2066,6 +2067,8 @@ func (e ErrorResponseCode) Valid() bool {
 	case IDEMPOTENCYREQUESTINPROGRESS:
 		return true
 	case INTERNALERROR:
+		return true
+	case INVITATIONACCOUNTEXISTS:
 		return true
 	case LOGQUERYINVALID:
 		return true
@@ -8986,7 +8989,22 @@ type ListAgentConversationsParams struct {
 }
 
 // CreateAgentConversationJSONBody defines parameters for CreateAgentConversation.
-type CreateAgentConversationJSONBody map[string]interface{}
+type CreateAgentConversationJSONBody struct {
+	// EnvironmentId Canonical environment binding for scoped tools.
+	EnvironmentId *string `json:"environment_id,omitempty"`
+
+	// Metadata Reserved midnight.* keys are assigned by the server.
+	Metadata *map[string]interface{} `json:"metadata,omitempty"`
+	Model    *string                 `json:"model,omitempty"`
+
+	// ProjectId Required for ordinary tenant users.
+	ProjectId *string `json:"project_id,omitempty"`
+	ServiceId *string `json:"service_id,omitempty"`
+
+	// SystemPreamble Conversation instructions; they do not confer tool or tenant authority.
+	SystemPreamble *string `json:"system_preamble,omitempty"`
+	Title          *string `json:"title,omitempty"`
+}
 
 // CreateAgentConversationParams defines parameters for CreateAgentConversation.
 type CreateAgentConversationParams struct {
@@ -9193,6 +9211,13 @@ type CreateIdentityInvitationParams struct {
 // AcceptIdentityInvitationParams defines parameters for AcceptIdentityInvitation.
 type AcceptIdentityInvitationParams struct {
 	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// OnboardIdentityInvitationJSONBody defines parameters for OnboardIdentityInvitation.
+type OnboardIdentityInvitationJSONBody struct {
+	DisplayName     string  `json:"display_name"`
+	InvitationToken *string `json:"invitation_token,omitempty"`
+	Password        *string `json:"password,omitempty"`
 }
 
 // RevokeIdentityInvitationParams defines parameters for RevokeIdentityInvitation.
@@ -9887,6 +9912,9 @@ type CreateIdentityInvitationJSONRequestBody = IdentityInvitationCreateRequest
 
 // AcceptIdentityInvitationJSONRequestBody defines body for AcceptIdentityInvitation for application/json ContentType.
 type AcceptIdentityInvitationJSONRequestBody = IdentityInvitationAcceptRequest
+
+// OnboardIdentityInvitationJSONRequestBody defines body for OnboardIdentityInvitation for application/json ContentType.
+type OnboardIdentityInvitationJSONRequestBody OnboardIdentityInvitationJSONBody
 
 // ReissueIdentityInvitationJSONRequestBody defines body for ReissueIdentityInvitation for application/json ContentType.
 type ReissueIdentityInvitationJSONRequestBody = IdentityInvitationReissueRequest

@@ -55,17 +55,34 @@ browser lane. Its serial Chromium journeys use the real Go API and PostgreSQL:
 - Disposable administrator password recovery preserving the authenticator,
   invalidation of all previous sessions, old-password rejection, and required
   MFA with the replacement password.
+- New-user enrollment through `/invite`: one invitation creates an ordinary
+  account and its exact grant, then uses normal login. Replay and revoked
+  credentials fail; an existing account must sign in and keeps its password.
+- Tenant chat privacy and scoped read/write tools with viewer/editor roles,
+  explicit mutation consent, and revocation. A deterministic local HTTP model
+  supplies tool requests; the browser, API, tool execution, and storage are real.
+- A late failure diagnosis produced by the actual diagnosis runner, provider
+  HTTP adapter, conversation adapter, and PostgreSQL event store. Viewers read
+  the report without a composer; foreign access and writes fail, and revocation
+  hides a visible report. The failure and local model are controlled fixtures.
 
-No API requests are intercepted. Invitee accounts are explicit database
-fixtures with real password hashes and no initial memberships; these tests
-do **not** prove account enrollment or invitation email delivery. The existing
-account can accept a manually delivered credential from its project index.
-Only the first administrator uses the product's one-shot account setup flow.
+No browser API requests are intercepted. The original existing-recipient
+journey uses clearly labeled database identities with no initial memberships.
+The new enrollment, chat, and diagnosis journeys create recipients through the
+public invitation-bound product API; the enrollment journey also drives the
+new-user UI. No route permits unrestricted signup or replacement of an
+existing password. Ordinary accounts follow the existing password-only policy;
+first-administrator MFA remains required. Invitation delivery is manual and no
+email service is exercised. The onboarding endpoint has no replay cache:
+after a lost creation response, sign in with the new account's password.
 
-There is no worker in this lane. The automation test checks HTTP 202, a readable
+There is no deployment worker in this lane. The automation test checks HTTP 202, a readable
 linked operation, and exactly one queued durable deployment. Applying without
 deploying and queued admission do not prove image pulls, runtime secret
 delivery, Apply & Deploy completion, or serving application traffic.
+The diagnosis producer creates a controlled failure through the actual stores
+and runs the real report producer separately. It does not prove an installed
+worker caused that failure or that an external model produced the report.
 
 The harness starts its own disposable Postgres 16 container when Docker is
 available, or accepts `MIDNIGHT_PG_E2E_DSN` for a fresh database on loopback named
@@ -81,9 +98,13 @@ The lane uses production KEK file permissions and runs separately from
 
 ## Agent panel
 
-The right-rail dock (`AgentDock`) is mounted once in `AppShell` and persists
-across navigation, so an in-flight SSE stream is **not** aborted when the user
-switches pages. Expanded width is 440 px; collapsed strip is 48 px.
+The right-rail dock (`AgentDock`) is mounted once in `AppShell`. Changing
+project, service, or environment clears its selected conversation, draft, and
+mutation consent and closes the local stream. This keeps an old conversation
+from appearing under a new target. Closing the stream does not cancel a
+server-side turn already submitted. Conversations carry explicit environment
+scope, and mutation consent remains subject to current server authorization.
+Expanded width is 440 px; the collapsed control is a floating button.
 
 ### Local mock backend
 

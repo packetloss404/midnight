@@ -95,6 +95,7 @@ describe("AgentDock conversation submission", () => {
       }),
     );
     expect(state.streamStart).toHaveBeenCalledWith("cnv_new");
+    expect(state.createConversation).toHaveBeenCalledWith({ project_id: "prj_1", service_id: null, environment_id: "env_prod", title: "Inspect production" });
   });
 
   it("waits for the SSE connection before posting and stops if opening fails", async () => {
@@ -129,6 +130,17 @@ describe("AgentDock conversation submission", () => {
     expect(state.postMessage).not.toHaveBeenCalled();
   });
 
+  it("shows a denied stream handshake and preserves the unsent draft", async () => {
+    const user = userEvent.setup();
+    state.streamStart.mockRejectedValueOnce(new AgentRequestError(403, { detail: "Conversation access was denied." }));
+    render(<AgentDock context={context} />);
+    await user.type(screen.getByTestId("agent-composer-input"), "Keep this draft");
+    await user.click(screen.getByTestId("agent-composer-send"));
+    expect(await screen.findByTestId("agent-send-error")).toHaveTextContent("Conversation access was denied");
+    expect(screen.getByTestId("agent-composer-input")).toHaveValue("Keep this draft");
+    expect(state.postMessage).not.toHaveBeenCalled();
+  });
+
   it("cancels an in-flight stream before opening a new conversation", async () => {
     const user = userEvent.setup();
     render(<AgentDock context={{ routeId: "/" }} />);
@@ -137,6 +149,33 @@ describe("AgentDock conversation submission", () => {
 
     expect(state.streamCancel).toHaveBeenCalledTimes(1);
     expect(state.createConversation).toHaveBeenCalledTimes(1);
+  });
+
+  it("clears the selected conversation and local stream when environment changes", async () => {
+    const user = userEvent.setup();
+    const { rerender } = render(<AgentDock context={context} />);
+    await user.click(screen.getByRole("button", { name: "New conversation" }));
+    expect(state.createConversation).toHaveBeenLastCalledWith({ project_id: "prj_1", service_id: null, environment_id: "env_prod", title: "New conversation" });
+    await waitFor(() => expect(localStorage.getItem("midnight.agent.currentId")).toBe("cnv_new"));
+    const calls = state.streamCancel.mock.calls.length;
+    rerender(<AgentDock context={{ ...context, environmentId: "env_staging", contextLabel: "staging" }} />);
+    await waitFor(() => expect(state.streamCancel.mock.calls.length).toBe(calls + 1));
+    expect(localStorage.getItem("midnight.agent.currentId")).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Start a conversation for this context");
+  });
+
+  it("does not submit a message whose conversation creation completed after navigation", async () => {
+    const user = userEvent.setup();
+    let resolve!: (value: {id: string}) => void;
+    state.createConversation.mockReturnValueOnce(new Promise(done => { resolve = done; }));
+    const { rerender } = render(<AgentDock context={context} />);
+    await user.type(screen.getByTestId("agent-composer-input"), "Inspect this service");
+    await user.click(screen.getByTestId("agent-composer-send"));
+    rerender(<AgentDock context={{ ...context, serviceId: "svc_other" }} />);
+    resolve({id: "cnv_old_scope"});
+    await waitFor(() => expect(state.streamCancel).toHaveBeenCalled());
+    expect(state.postMessage).not.toHaveBeenCalled();
+    expect(state.streamStart).not.toHaveBeenCalled();
   });
 
   it("keeps the draft in the composer when the send fails", async () => {

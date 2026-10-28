@@ -84,6 +84,7 @@ func NewDefaultRegistry() *Registry {
 	r.MustRegister(listProjectsTool())
 	r.MustRegister(listServicesTool())
 	r.MustRegister(getServiceTool())
+	r.MustRegister(getSourceDeploymentContextTool())
 	r.MustRegister(getDeploymentTool())
 	r.MustRegister(getLogsTool())
 	r.MustRegister(setVariableTool())

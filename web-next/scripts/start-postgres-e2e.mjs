@@ -5,6 +5,7 @@ import { dirname, relative, resolve, isAbsolute } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { once } from "node:events";
+import { startBrowserProvider } from "./browser-provider-fixture.mjs";
 
 const exec = promisify(execFile);
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -23,6 +24,7 @@ if (process.platform === "win32") {
 let ownedContainer;
 let ownsRunDirectory = false;
 let server;
+let provider;
 let stopping = false;
 async function stop(code = 0) {
   if (stopping) return;
@@ -41,6 +43,7 @@ async function stop(code = 0) {
   if (ownedContainer) {
     await exec("docker", ["rm", "-f", ownedContainer], { timeout: 8_000 }).catch(() => {});
   }
+  provider?.close();
   if (ownsRunDirectory) await rm(runDirectory, { recursive: true, force: true });
   process.exit(code);
 }
@@ -79,7 +82,7 @@ try {
     dsn = `postgres://midnight_e2e:${password}@127.0.0.1:${port}/midnight_browser_e2e?sslmode=disable`;
     let ready = false;
     for (let attempt = 0; attempt < 60; attempt++) {
-      ready = await exec("docker", ["exec", ownedContainer, "pg_isready", "-U", "midnight_e2e", "-d", "midnight_browser_e2e"])
+      ready = await exec("docker", ["exec", ownedContainer, "pg_isready", "-h", "127.0.0.1", "-U", "midnight_e2e", "-d", "midnight_browser_e2e"])
         .then(() => true, () => false);
       if (ready) break;
       await new Promise((done) => setTimeout(done, 500));
@@ -88,7 +91,7 @@ try {
   }
   const environment = { ...process.env };
   for (const name of Object.keys(environment)) {
-    if (name.startsWith("MIDNIGHT_") || name.startsWith("PG") || name === "ANTHROPIC_API_KEY" || name === "OPENAI_API_KEY") delete environment[name];
+    if (/^(MIDNIGHT_|PG|ANTHROPIC_|OPENAI_|MINIMAX_)/.test(name)) delete environment[name];
   }
   for (const [variable, filename, raw] of [
     ["MIDNIGHT_CURSOR_KEY_PATH", "cursor.key", false],
@@ -104,6 +107,7 @@ try {
     environment[variable] = path;
   }
   const operatorToken = randomBytes(32).toString("base64url");
+  provider = await startBrowserProvider();
   // The fixture helper consumes only this already-validated disposable DSN.
   await writeFile(statePath, JSON.stringify({ operatorToken, fixtureDsn: dsn }), { mode: 0o600 });
   Object.assign(environment, {
@@ -112,6 +116,9 @@ try {
     MIDNIGHT_AGENT_AUTH_DEVELOPMENT: "1",
     MIDNIGHT_AGENT_HMAC_SECRET: randomBytes(32).toString("hex"),
     MIDNIGHT_APPS_DOMAIN: "apps.browser.test",
+    MIDNIGHT_AGENT_PROVIDER: "anthropic",
+    ANTHROPIC_API_KEY: "browser-fixture-key",
+    ANTHROPIC_BASE_URL: provider.url,
   });
   const executable = resolve(runDirectory, "midnight-server");
   server = spawn("go", ["build", "-p", "2", "-o", executable, "./cmd/midnight-server"], {

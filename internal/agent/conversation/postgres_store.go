@@ -385,7 +385,37 @@ FROM agent_conversations`
 	}
 	addEquality("project_id", filter.ProjectID)
 	addEquality("service_id", filter.ServiceID)
-	addEquality("actor_id", filter.ActorID)
+	if filter.IncludeSystemDiagnosis && filter.ActorID != "" {
+		args = append(args, filter.ActorID)
+		ownerArg := len(args)
+		args = append(args, filter.ReaderUserID, filter.SharedDiagnosisWorkspaceRoles, filter.SharedDiagnosisProjectRoles)
+		readerArg := len(args) - 2
+		clauses = append(clauses, fmt.Sprintf(`(actor_id=$%d OR (actor_id='agent:diagnosis' AND metadata->>'midnight.kind'='diagnosis'
+AND EXISTS(SELECT 1 FROM deployments d JOIN projects p ON p.id=d.project_id
+JOIN operations o ON o.id=d.operation_id AND o.state='FAILED'
+JOIN operation_events e ON e.operation_id=d.operation_id
+WHERE d.state='failed' AND d.id=agent_conversations.metadata->>'midnight.deployment_id'
+AND d.operation_id=agent_conversations.metadata->>'midnight.operation_id'
+AND d.project_id=agent_conversations.project_id AND d.service_id=agent_conversations.service_id
+AND d.project_id=agent_conversations.metadata->>'midnight.project_id'
+AND d.service_id=agent_conversations.metadata->>'midnight.service_id'
+AND p.workspace_id=agent_conversations.metadata->>'midnight.workspace_id'
+AND d.environment_id=agent_conversations.metadata->>'midnight.environment_id'
+AND e.message='deploy:diagnosis_attached diagnosis_id='||agent_conversations.id
+AND (EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=p.workspace_id AND wm.user_id=$%d AND wm.accepted_at IS NOT NULL AND wm.role=ANY($%d::text[]))
+OR EXISTS(SELECT 1 FROM project_members pm WHERE pm.project_id=p.id AND pm.user_id=$%d AND pm.accepted_at IS NOT NULL AND pm.role=ANY($%d::text[]))))))`, ownerArg, readerArg, readerArg+1, readerArg, readerArg+2))
+	} else {
+		addEquality("actor_id", filter.ActorID)
+	}
+	if filter.ReaderUserID != "" {
+		args = append(args, filter.ReaderUserID)
+		clauses = append(clauses, fmt.Sprintf(`EXISTS(SELECT 1 FROM projects p JOIN workspaces w ON w.id=p.workspace_id AND w.deleted_at IS NULL
+WHERE p.id=agent_conversations.project_id AND p.deleted_at IS NULL
+AND (agent_conversations.service_id IS NULL OR EXISTS(SELECT 1 FROM services svc WHERE svc.id=agent_conversations.service_id AND svc.project_id=p.id AND svc.deleted_at IS NULL))
+AND (COALESCE(agent_conversations.metadata->>'midnight.environment_id','')='' OR EXISTS(
+SELECT 1 FROM environments env WHERE env.id=agent_conversations.metadata->>'midnight.environment_id' AND env.project_id=p.id AND env.deleted_at IS NULL
+AND (NOT env.access_restricted OR EXISTS(SELECT 1 FROM workspace_members wm WHERE wm.workspace_id=p.workspace_id AND wm.user_id=$%d AND wm.accepted_at IS NOT NULL AND wm.role='admin')))))`, len(args)))
+	}
 	if filter.After != nil {
 		args = append(args, filter.After.CreatedAt.UTC(), filter.After.ID)
 		clauses = append(clauses, fmt.Sprintf("(created_at, id) < ($%d, $%d)", len(args)-1, len(args)))

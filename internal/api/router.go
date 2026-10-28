@@ -297,6 +297,8 @@ type DataStack struct {
 	// IdentityInvitationMutations coordinates human-only create, reissue,
 	// revoke, and accept transactions.
 	IdentityInvitationMutations IdentityInvitationMutationCoordinator
+	// IdentityInvitationOnboarding atomically enrolls a new invited account.
+	IdentityInvitationOnboarding InvitationOnboardingCoordinator
 	// IdentityAccess owns workspace/project membership and canonical scope
 	// resolution. It is separate from session verification so tenant auth can
 	// stay fail-closed while a store is unavailable.
@@ -877,6 +879,7 @@ func buildRouterWithDataStackInventory(stack DataStack) (*http.ServeMux, http.Ha
 	mux.HandleFunc(v1alphaPrefix+"/openapi.yaml", openAPIHandler)
 	mux.HandleFunc(v1alphaPrefix+"/asyncapi.yaml", asyncAPIHandler)
 	registerIdentitySessionRoutes(mux, stack.IdentitySessions, emitter)
+	registerInvitationOnboardingRoutes(mux, stack.IdentityInvitationOnboarding)
 	registerIdentityAccessRoutes(mux, stack.IdentitySessions, stack.IdentityAccess, clock, emitter)
 	registerGitHubSetupRoutes(mux, stack.IdentitySessions, stack.GitHubSetup)
 	protectedHandleFunc(instanceDomainsPath, instanceDomainsHandler(stack.InstanceDomainSettings, stack.AppsDomain, emitter))
@@ -1312,6 +1315,9 @@ func buildRouterWithDataStackInventory(stack DataStack) (*http.ServeMux, http.Ha
 	if stack.ConversationStore == nil {
 		stack.ConversationStore = conversation.NewMemoryStore(clock)
 	}
+	if stack.ConversationScopeAuthorizer == nil {
+		stack.ConversationScopeAuthorizer = NewTenantConversationPolicy(stack)
+	}
 	agentEnv := buildAgentEnv(stack, "agent:chat")
 	conversationService, _ := conversation.NewService(conversation.Config{
 		Store:        stack.ConversationStore,
@@ -1329,7 +1335,7 @@ func buildRouterWithDataStackInventory(stack DataStack) (*http.ServeMux, http.Ha
 			PrincipalFromRequest: stack.AgentPrincipalFromRequest,
 			CursorCodec:          stack.CursorCodec,
 		}
-		convHandler := protected(agentConversationsHandler(convDeps))
+		convHandler := productProtected(tenantConversationAdmissionMiddleware(stack, agentConversationsHandler(convDeps)))
 		mux.Handle(AgentConversationsPrefix, convHandler)
 		mux.Handle(AgentConversationsPrefix+"/", convHandler)
 	}

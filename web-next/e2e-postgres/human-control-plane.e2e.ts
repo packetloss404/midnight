@@ -2,6 +2,9 @@ import { expect, test, type Page } from "@playwright/test";
 import { readFile } from "node:fs/promises";
 import { totpCode } from "../src/pages/SetupCrypto";
 import { authenticatePage, browserRequest, freshPassword, login, seedExistingRecipients, type Human } from "./support";
+import { registerInvitationOnboardingTests } from "./invitation-onboarding";
+import { registerDiagnosisTests } from "./diagnosis";
+import { registerTenantChatTests } from "./tenant-chat";
 
 // One disposable database has one first-run claim. Keep dependent human flows
 // in one serial suite, with credentials only in worker memory.
@@ -17,8 +20,27 @@ test("enrolls a real administrator, applies encrypted variables and runtime chan
     window.localStorage.setItem("midnight.agent.pinned", "0");
   });
 
+  const initialErrors: string[] = [];
+  const initialResponses: string[] = [];
+  const recordInitialError = (error: Error) => initialErrors.push(error.message.slice(0, 500));
+  const recordInitialResponse = (response: import("@playwright/test").Response) => {
+    const path = new URL(response.url()).pathname;
+    if (path.startsWith("/api/")) initialResponses.push(`${response.status()} ${path}`);
+  };
+  page.on("pageerror", recordInitialError);
+  page.on("response", recordInitialResponse);
   await page.goto("/");
-  await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  try {
+    await expect(page.getByRole("heading", { name: "Sign in", exact: true })).toBeVisible();
+  } catch (error) {
+    // Pre-credential boot diagnostics only: no headers, storage or screenshots.
+    const redact = (value: string) => value.split(operatorToken).join("[redacted]").split(password).join("[redacted]");
+    console.error(JSON.stringify({ initialPath: new URL(page.url()).pathname, initialErrors: initialErrors.map(redact), initialResponses, initialBody: redact((await page.locator("body").innerText()).slice(0, 2000)) }));
+    throw error;
+  } finally {
+    page.off("pageerror", recordInitialError);
+    page.off("response", recordInitialResponse);
+  }
   await page.getByText("Emergency recovery", { exact: true }).click();
   await page.getByLabel("Operator recovery token").fill(operatorToken);
   await page.getByRole("button", { name: "Verify and enter recovery mode" }).click();
@@ -320,8 +342,14 @@ test("administrator recovery keeps MFA, revokes every previous session, and admi
     await page.getByLabel(/^Authenticator code/).fill(await totpCode(administrator.totpSecret!));
     await page.getByRole("button", { name: "Verify and sign in", exact: true }).click();
     await expect(page.getByRole("heading", { name: "Projects", exact: true })).toBeVisible();
+    administrator.password = password;
+    administrator.token = (await page.evaluate(() => window.sessionStorage.getItem("midnight.human-session-token"))) ?? "";
   } finally { await context.close(); }
 });
+
+registerInvitationOnboardingTests({ administrator: () => administrator });
+registerDiagnosisTests({ administrator: () => administrator });
+registerTenantChatTests({ administrator: () => administrator });
 
 function card(page: Page, title: string) {
   return page.locator("section").filter({ has: page.getByRole("heading", { name: title, exact: true }) }).last();

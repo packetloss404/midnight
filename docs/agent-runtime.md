@@ -1,16 +1,27 @@
 # Agent runtime environment
 
-> **Status (as of this commit):** chat, the tool registry, MCP (`/mcp/v1`), per-tool audit, and spend caps are wired into `midnight-server`. Opt-in failure diagnosis runs in `midnight-worker`, persists a scoped report, and attaches its ID through a durable operation event. Local adapter and PostgreSQL tests establish this wiring; real paid-provider execution still requires [external acceptance](remaining-e2e-acceptance.md). **`deploy_from_source` is unavailable through the agent**, and **variable and deployment mutations require a signed-in administrator session** — an operator recovery token can drive redeploy/rollback but not variable changes. See [What the agent cannot do](#what-the-agent-cannot-do).
+> **Status (as of this commit):** chat, the tool registry, MCP (`/mcp/v1`), per-tool audit, and spend caps are wired into `midnight-server`. Tenant chat uses canonical project, service and environment authorization. Opt-in failure diagnosis runs in `midnight-worker`, persists a scoped report, and attaches its ID through a durable operation event. The deployment detail panel reads that event and displays the report. Local tests use a controlled upstream model; real paid-provider execution still requires [external acceptance](remaining-e2e-acceptance.md). The agent can submit [bounded inline source files](agent-source-deployment.md) through the durable source pipeline.
 
 Chat and MCP are wired at `midnight-server serve` bootstrap. The chat panel
-requires a selected provider key, a supported model/endpoint, and administrator
-authentication. The defaults target a single trusted installation.
+requires a selected provider key, a supported model/endpoint, and an authorized
+human session. The defaults target a single trusted installation.
 
-Chat and persisted diagnosis routes accept an installation-administrator human
-session or the configured operator recovery credential. Ordinary tenant human
-sessions are refused. These routes do not implement per-project conversation
-RBAC: project/service tags describe context, while administrator authority is
-installation-wide. Use an isolated QA installation for live acceptance.
+Ordinary tenant chats require an explicit authorized project and remain private
+to their creator. Service and environment selections must belong to that project.
+Viewers may use capability-authorized read tools. Editors and owners may request
+mutations with explicit per-message consent, the global mutation brake and the
+same transactional tenant coordinators used by the product APIs. Sessions,
+membership and environment restrictions are checked again for every access and
+tool dispatch; streams are revalidated while open. Tool targets cannot escape
+the conversation scope. Automation credentials cannot use human chat.
+
+Canonical worker diagnosis reports are shared read-only with project members
+who currently have log-read permission. A report must match an actual failed
+deployment and its durable attachment event. Human clients cannot forge reserved
+system metadata or send/delete these reports. Installation administrators and
+operator recovery retain their broader trusted authority; recovery credentials
+still cannot write tenant variables or submit agent source builds. Use an
+isolated QA installation for live paid-provider acceptance.
 
 The worker resolves diagnosis context from the failed operation's unique
 canonical deployment, reads bounded redacted build/runtime log tails, and sends
@@ -78,9 +89,9 @@ happen.
 | Tool | Status | Why |
 | ---- | ------ | --- |
 | `list_projects`, `list_services`, `get_service`, `get_deployment`, `get_logs`, `get_metrics` | Working | Bound to the control plane's read stores. |
-| `redeploy`, `rollback` | Working, with an authorization fork | With a signed-in administrator session the call goes through `TenantDeploymentActions` — the same coordinator the console's action route uses, with the caller's own RBAC, resource-version fencing, idempotency and audit. With an operator recovery token it goes through `DeploymentActions` directly, which is what the equivalent REST route does for the same credential. Both are unavailable in memory mode, where `DeploymentActions` is deliberately nil. |
-| `set_variable`, `unset_variable` | Working **only** with a signed-in administrator session | The tenant variable coordinator authorizes `variables.write` against a live human session tuple inside its transaction. An operator recovery token carries no such session, so there is no identity for the agent to act as and the tool refuses. Values are write-only: nothing echoes a value back into the transcript, the result, or the audit row. Requires Postgres. |
-| `deploy_from_source` | **Not available** | Two independent blockers. The durable tenant deploy intake accepts pre-built images only — it refuses source outright. The generic source intake that does accept a git ref is an operator/automation HTTP route with no in-process coordinator seam, and it rejects GitHub App coordinates by design, because those must come from Midnight's signed-webhook source authority, which an agent principal cannot stand in for. The tool stays registered so the model can explain this instead of inventing a workaround. Push the commit, or run `midnight up`. |
+| `redeploy`, `rollback` | Authorized tenant human sessions | Uses `TenantDeploymentActions` with live RBAC, resource-version fencing, idempotency and audit. The trusted recovery path uses the existing operator coordinator. Requires durable runtime wiring. |
+| `set_variable`, `unset_variable` | Authorized tenant human sessions with explicit mutation consent | The tenant variable coordinator checks live `variables.write` inside its transaction. Recovery tokens have no human session and are refused. Values are write-only in results and audit; a user-supplied value still exists in the chat input. Requires Postgres. |
+| `deploy_from_source` | Bounded inline UTF-8 files in a scoped human chat | Uses the same source artifact, quota, acceptance/outbox and worker pipeline as `midnight up`. Requires explicit mutation consent and current resource versions. Arbitrary Git URLs, GitHub App impersonation and local filesystem paths are unsupported. See [source deployment](agent-source-deployment.md). |
 
 Variable writes are scoped to a `(service, environment)` pair. The model may name
 the environment with `environment_id`; when it does not, the environment is

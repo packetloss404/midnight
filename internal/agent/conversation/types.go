@@ -79,8 +79,14 @@ type ListFilter struct {
 	ProjectID string
 	ServiceID string
 	ActorID   string
-	Limit     int
-	After     *ConversationListPosition
+	// IncludeSystemDiagnosis is set only by the trusted scope policy, never
+	// from HTTP input. Shared reports are still individually authorized.
+	IncludeSystemDiagnosis        bool
+	ReaderUserID                  string // trusted durable-policy input; never accepted from HTTP
+	SharedDiagnosisWorkspaceRoles []string
+	SharedDiagnosisProjectRoles   []string
+	Limit                         int
+	After                         *ConversationListPosition
 }
 
 // ConversationListPosition is the immutable storage key embedded in the

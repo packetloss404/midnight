@@ -1,7 +1,11 @@
 // Copyright 2026 Midnight Authors. SPDX-License-Identifier: Apache-2.0.
 package conversation
 
-import "context"
+import (
+	"context"
+
+	"github.com/midnight/midnight/internal/agent"
+)
 
 // Scope identifies the project / service / actor a conversation
 // belongs to, plus the authenticated principal making the request. The
@@ -15,8 +19,9 @@ type Scope struct {
 	// ProjectID and ServiceID identify the conversation's parent
 	// resources. Empty when the conversation is global (e.g. the
 	// dashboard-level "ask a question" panel).
-	ProjectID string
-	ServiceID string
+	ProjectID     string
+	ServiceID     string
+	EnvironmentID string
 
 	// ActorID is the principal_id from the bearer token. Empty when
 	// the router is running in unauthenticated dev mode.
@@ -43,6 +48,16 @@ type ProjectScopeAuthorizer interface {
 	// return ErrUnauthorized for denials so the service layer
 	// translates them to a 403.
 	Authorize(ctx context.Context, scope Scope) error
+}
+
+// ScopePolicy additionally binds storage filters and tool handles to verified
+// request identity. It is implemented by the control plane; model arguments,
+// caller metadata and the ProjectScope display hint never grant authority.
+type ScopePolicy interface {
+	ProjectScopeAuthorizer
+	PrepareStart(context.Context, StartInput) (StartInput, error)
+	PrepareList(context.Context, ListFilter, string) (ListFilter, error)
+	BindEnvironment(context.Context, Conversation, string, agent.Env) (agent.Env, error)
 }
 
 // AllowAllAuthorizer is the no-op authorizer used when DataStack does

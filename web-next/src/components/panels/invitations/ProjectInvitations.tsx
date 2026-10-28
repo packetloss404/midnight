@@ -698,7 +698,9 @@ function InvitationCredentialDialog({
                 Copy it now. Midnight will never show it again.
               </strong>
               Midnight does not send invitation email. Deliver this credential
-              manually through a secure channel. The recipient must sign in
+              manually through a secure channel. New recipients can create their
+              account at <a href="/invite" className="text-accent underline">/invite</a>
+              {" "}using this credential. Existing recipients must sign in
               and paste it into <strong className="text-text">Accept invitation</strong>.
               Do not put the credential in a URL or query string.
             </div>

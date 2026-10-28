@@ -46,6 +46,23 @@ inherits its email, role, and exact scope. Migration 0043 records a unique
 into multiple replacements. The down migration refuses to erase replacement
 history.
 
+### Invited account enrollment
+
+A recipient without an account opens `/invite` and pastes the credential into
+the form. The public `POST /api/v1alpha/invitations/onboard` accepts only
+`invitation_token`, `display_name` and a 12–1024-byte password. It derives the
+email, roles and exact scope from the locked invitation. Account creation,
+acceptance, memberships and audit commit in one serializable transaction; a
+failure creates no account or grant. Durable HMAC-pseudonymized network and
+invitation budgets limit attempts before password hashing.
+
+Onboarding returns no session. The console signs in through the normal login
+flow afterward. An existing account receives `INVITATION_ACCOUNT_EXISTS` and
+must sign in to accept; onboarding never replaces its password. Used, revoked,
+expired and invalid credentials receive the same unavailable-invitation result.
+Tokens are pasted in the form, never carried in URLs or stored by the console.
+Lost success acknowledgements can be recovered by signing in normally.
+
 ## Consequences
 
 - A copied credential must be delivered through an operator-chosen secure
@@ -56,5 +73,7 @@ history.
   replacement.
 - Invitation acceptance cannot be used to change the recipient email or cross
   a tenant boundary.
-- Account recovery, verified email delivery, and acceptance by unauthenticated
-  users remain separate, unimplemented capabilities.
+- General public signup, verified email delivery and ordinary-user account
+  recovery remain outside this invitation flow. Possession of the manually
+  delivered credential is the enrollment authority; it does not prove control
+  of an email inbox independently.

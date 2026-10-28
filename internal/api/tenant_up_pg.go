@@ -89,6 +89,9 @@ func (c *PostgresTenantDeployIntakeCoordinator) PreflightSourceUp(
 			if err != nil {
 				return err
 			}
+			if err := validateTenantAgentSourceInTx(ctx, tx, request.Principal, authorization, request.EnvironmentID, request.AgentSource); err != nil {
+				return err
+			}
 			reservation, err := c.SourceArtifactQuota.ReserveInTx(
 				ctx,
 				tx,
@@ -149,7 +152,7 @@ func (c *PostgresTenantDeployIntakeCoordinator) coalesceTenantSourceUpReplay(
 				ctx,
 				pgx.TxOptions{IsoLevel: pgx.Serializable},
 				func(tx *pg.Tx) error {
-					mutationCtx, _, authorizeErr := authorizeTenantDeployInTx(
+					mutationCtx, authorization, authorizeErr := authorizeTenantDeployInTx(
 						ctx,
 						tx,
 						request.Principal,
@@ -160,6 +163,9 @@ func (c *PostgresTenantDeployIntakeCoordinator) coalesceTenantSourceUpReplay(
 					)
 					if authorizeErr != nil {
 						return authorizeErr
+					}
+					if err := validateTenantAgentSourceInTx(mutationCtx, tx, request.Principal, authorization, request.EnvironmentID, request.AgentSource); err != nil {
+						return err
 					}
 					reservation, err = c.Idempotency.LoadInTx(
 						mutationCtx,
@@ -254,7 +260,7 @@ func (c *PostgresTenantDeployIntakeCoordinator) FinalizeSourceUpReplay(
 			ctx,
 			pgx.TxOptions{IsoLevel: pgx.Serializable},
 			func(tx *pg.Tx) error {
-				mutationCtx, _, authorizeErr := authorizeTenantDeployInTx(
+				mutationCtx, authorization, authorizeErr := authorizeTenantDeployInTx(
 					ctx,
 					tx,
 					request.Principal,
@@ -265,6 +271,9 @@ func (c *PostgresTenantDeployIntakeCoordinator) FinalizeSourceUpReplay(
 				)
 				if authorizeErr != nil {
 					return authorizeErr
+				}
+				if err := validateTenantAgentSourceInTx(mutationCtx, tx, request.Principal, authorization, request.EnvironmentID, request.AgentSource); err != nil {
+					return err
 				}
 				reservation, err = c.Idempotency.LoadInTx(
 					mutationCtx,
@@ -308,6 +317,7 @@ func tenantSourceUpReplayFingerprint(
 			Digest:          request.ExpectedDigest,
 			CompressedBytes: request.CompressedBytes,
 		},
+		request.AgentSource,
 	)
 	if err != nil {
 		return idempotency.RequestFingerprint{}, err
@@ -385,6 +395,9 @@ func (c *PostgresTenantDeployIntakeCoordinator) PublishSourceUp(
 			if err != nil {
 				return err
 			}
+			if err := validateTenantAgentSourceInTx(mutationCtx, tx, preflight.Principal, authorization, preflight.EnvironmentID, preflight.AgentSource); err != nil {
+				return err
+			}
 			published, err = c.SourceArtifactQuota.PublishInTx(
 				mutationCtx,
 				tx,
@@ -432,9 +445,10 @@ func (c *PostgresTenantDeployIntakeCoordinator) DeploySourceArtifact(
 	}
 	artifact := request.Artifact
 	return c.deployTenantIntent(ctx, tenantDeployTransactionRequest{
-		Principal: request.Principal,
-		Session:   request.Session,
-		ServiceID: request.ServiceID,
+		AgentSource: request.AgentSource,
+		Principal:   request.Principal,
+		Session:     request.Session,
+		ServiceID:   request.ServiceID,
 		Intent: DeployIntakeRequest{
 			EnvironmentID: strings.TrimSpace(request.EnvironmentID),
 			Source: &DeploySourceIntent{
@@ -511,6 +525,7 @@ func (c *PostgresTenantDeployIntakeCoordinator) validateSourceUpRequest(
 		request.EnvironmentID,
 		request.CommitMessage,
 		artifact,
+		request.AgentSource,
 	)
 	if err != nil {
 		return err
@@ -527,6 +542,7 @@ func (c *PostgresTenantDeployIntakeCoordinator) validateSourceUpRequest(
 		Key:             request.Key,
 		ExpectedDigest:  artifact.Digest,
 		CompressedBytes: artifact.CompressedBytes,
+		AgentSource:     request.AgentSource,
 	})
 	if err != nil {
 		return err
@@ -621,19 +637,26 @@ func tenantUpFingerprintDigest(
 	environmentID string,
 	message string,
 	artifact TenantSourceArtifact,
+	constraints ...*TenantAgentSourceConstraints,
 ) (string, error) {
+	var agentSource *TenantAgentSourceConstraints
+	if len(constraints) > 0 {
+		agentSource = constraints[0]
+	}
 	body, err := json.Marshal(struct {
-		ServiceID       string `json:"service_id"`
-		EnvironmentID   string `json:"environment_id"`
-		CommitMessage   string `json:"commit_message"`
-		ArchiveDigest   string `json:"archive_digest"`
-		CompressedBytes int64  `json:"compressed_bytes"`
+		ServiceID       string                        `json:"service_id"`
+		EnvironmentID   string                        `json:"environment_id"`
+		CommitMessage   string                        `json:"commit_message"`
+		ArchiveDigest   string                        `json:"archive_digest"`
+		CompressedBytes int64                         `json:"compressed_bytes"`
+		AgentSource     *TenantAgentSourceConstraints `json:"agent_source,omitempty"`
 	}{
 		ServiceID:       string(serviceID),
 		EnvironmentID:   strings.TrimSpace(environmentID),
 		CommitMessage:   message,
 		ArchiveDigest:   artifact.Digest,
 		CompressedBytes: artifact.CompressedBytes,
+		AgentSource:     agentSource,
 	})
 	if err != nil {
 		return "", fmt.Errorf("tenant up fingerprint encode: %w", err)
@@ -643,12 +666,13 @@ func tenantUpFingerprintDigest(
 
 func tenantUpPreflightIntentHash(request TenantSourceUpPreflightRequest) (string, error) {
 	body, err := json.Marshal(struct {
-		Method          string `json:"method"`
-		Path            string `json:"path"`
-		EnvironmentID   string `json:"environment_id"`
-		CommitMessage   string `json:"commit_message"`
-		ArchiveDigest   string `json:"archive_digest"`
-		CompressedBytes int64  `json:"compressed_bytes"`
+		Method          string                        `json:"method"`
+		Path            string                        `json:"path"`
+		EnvironmentID   string                        `json:"environment_id"`
+		CommitMessage   string                        `json:"commit_message"`
+		ArchiveDigest   string                        `json:"archive_digest"`
+		CompressedBytes int64                         `json:"compressed_bytes"`
+		AgentSource     *TenantAgentSourceConstraints `json:"agent_source,omitempty"`
 	}{
 		Method:          http.MethodPost,
 		Path:            tenantUpIdempotencyPath(request.ServiceID),
@@ -656,6 +680,7 @@ func tenantUpPreflightIntentHash(request TenantSourceUpPreflightRequest) (string
 		CommitMessage:   request.CommitMessage,
 		ArchiveDigest:   request.ExpectedDigest,
 		CompressedBytes: request.CompressedBytes,
+		AgentSource:     request.AgentSource,
 	})
 	if err != nil {
 		return "", fmt.Errorf("tenant up preflight fingerprint encode: %w", err)

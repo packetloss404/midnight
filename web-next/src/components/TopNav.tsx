@@ -32,6 +32,7 @@ export type TopNavProps = {
   };
   authMode?: "human" | "operator";
   operatorFeaturesAvailable?: boolean;
+  agentAvailable?: boolean;
   onLogout?: () => void;
   logoutError?: string;
   onLocalLogout?: () => void;
@@ -49,6 +50,7 @@ export function TopNav({
   identity,
   authMode,
   operatorFeaturesAvailable = true,
+  agentAvailable = operatorFeaturesAvailable,
   onLogout,
   logoutError,
   onLocalLogout,
@@ -125,7 +127,7 @@ export function TopNav({
         />
       ) : null}
 
-      {collapsed && operatorFeaturesAvailable && (
+      {collapsed && agentAvailable && (
         <button
           type="button"
           onClick={openAgentDock}

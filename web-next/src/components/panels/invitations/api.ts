@@ -46,6 +46,33 @@ export type IdentityInvitationCredentialResult = {
   invitation: IdentityInvitation;
 };
 
+export type InvitationOnboardingResult = {
+  user_id: string;
+  email: string;
+  invitation: IdentityInvitation;
+};
+
+// Keep credentials in this call's memory. This is deliberately not a React
+// Query mutation, whose retained variables would extend the secret lifetime.
+export async function onboardIdentityInvitation(input: {
+  invitation_token: string;
+  display_name: string;
+  password: string;
+}): Promise<InvitationOnboardingResult> {
+  const result = await apiFetch<InvitationOnboardingResult>("/invitations/onboard", {
+    auth: "none",
+    method: "POST",
+    body: input,
+  });
+  if (!result || typeof result.user_id !== "string" || !result.user_id.startsWith("usr_") ||
+      typeof result.email !== "string" || !validInvitationMetadata(result.invitation) ||
+      result.invitation.email !== result.email || !result.invitation.accepted_at ||
+      result.invitation.accepted_by_user_id !== result.user_id || "invitation_token" in result) {
+    throw new Error("Midnight returned an invalid invitation enrollment.");
+  }
+  return result;
+}
+
 export type InvitationScope = {
   workspaceId: string;
   projectId?: string;

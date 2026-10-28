@@ -274,7 +274,8 @@ describe("ProjectInvitations", () => {
     expect(screen.getByText(/does not send invitation email/)).toBeInTheDocument();
     expect(screen.getByText(/Do not put the credential in a URL or query string/)).toBeInTheDocument();
     expect(screen.getByDisplayValue(rawCredential)).toBeInTheDocument();
-    expect(screen.queryByRole("link")).toBeNull();
+    expect(screen.getByRole("link", { name: "/invite" })).toHaveAttribute("href", "/invite");
+    expect(screen.getAllByRole("link").some(link => link.getAttribute("href")?.includes(rawCredential))).toBe(false);
 
     await user.click(screen.getByRole("button", { name: "Copy credential" }));
     expect(clipboardWrite).toHaveBeenCalledWith(rawCredential);

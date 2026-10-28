@@ -107,6 +107,7 @@ also appear here so operators always have one place to read a recovery hint.
 | `INGRESS_PORT_BOUND` | Install | A required ingress port (80 or 443) is already bound by another process. | Stop the conflicting process or reconfigure ingress to a free port; rerun preflight. |
 | `INGRESS_RELOAD_THRASH` | Ingress | Traefik reload churn exceeded the thrash budget. | Pause route updates briefly to let the reload budget recover. |
 | `INTERNAL_ERROR` | API | Generic non-user-actionable fallback. | File an issue with the request id; operators consult the support bundle. |
+| `INVITATION_ACCOUNT_EXISTS` | API/Identity | The invited account already exists; onboarding did not change its password. | Sign in normally and accept the invitation. |
 | `LEASE_EXPIRED` | Queue | Reaper reclaimed an expired lease and requeued the job after exponential backoff. | Let the backoff elapse, then inspect worker health if the job expires repeatedly. |
 | `LEASE_EXPIRED_MAX_ATTEMPTS` | Queue | Reaper exhausted the retry budget for an expired lease and moved the job to terminal failure/dead-letter. | Inspect worker logs and the job payload, fix the underlying worker failure, then enqueue a new operation. |
 | `LINT_ADR_INDEX_DRIFT` | Tooling | `docs/adr/README.md` drifted from per-ADR front-matter. | Regenerate the ADR index from front-matter and recommit. |

@@ -83,6 +83,11 @@ x-problem-types:
     title: Authentication rate limited
     status: 429
     statuses: [429]
+  INVITATION_ACCOUNT_EXISTS:
+    type: https://midnight.dev/docs/errors#INVITATION_ACCOUNT_EXISTS
+    title: Invited account already exists
+    status: 409
+    statuses: [409]
   AUTH_OPERATOR_RECOVERY_REQUIRED:
     type: https://midnight.dev/docs/errors#AUTH_OPERATOR_RECOVERY_REQUIRED
     title: Operator recovery credential required
@@ -1562,12 +1567,67 @@ paths:
             application/problem+json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /invitations/onboard:
+    post:
+      summary: Create an invited account and accept its invitation atomically.
+      description: >
+        Public, rate-limited enrollment using a valid one-use invitation token. Email, membership roles, workspace and project come exclusively from the invitation. Existing accounts must sign in and accept normally; this endpoint never replaces a password or issues a session. Credentials must be sent in the JSON body, never URL parameters. Responses use no-store.
+
+      operationId: onboardIdentityInvitation
+      tags: [Identity]
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [invitation_token, display_name, password]
+              properties:
+                invitation_token: {type: string, maxLength: 128, writeOnly: true}
+                display_name: {type: string, minLength: 1, maxLength: 160}
+                password: {type: string, minLength: 12, maxLength: 1024, writeOnly: true}
+            example: {"display_name": "example-display-name", "invitation_token": "redacted-example", "password": "example-password"}
+      responses:
+        '201':
+          description: Account created and invitation accepted; sign in normally.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [user_id, email, invitation]
+                properties:
+                  user_id: {type: string}
+                  email: {type: string, format: email}
+                  invitation: {$ref: '#/components/schemas/IdentityInvitation'}
+              example: {"email": "operator@example.com", "invitation": {"created_at": "2026-01-02T03:04:05Z", "email": "operator@example.com", "expires_at": "2026-01-02T03:04:05Z", "id": "id_demo", "invited_by_user_id": "id_demo", "resource_version": 1, "token_prefix": "redacted-example", "updated_at": "2026-01-02T03:04:05Z", "workspace_id": "wrk_demo"}, "user_id": "id_demo"}
+        '400':
+          description: Invalid JSON body or forbidden query parameters.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '409':
+          description: Invitation unavailable (`RESOURCE_CONFLICT`) or existing account (`INVITATION_ACCOUNT_EXISTS`).
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '429':
+          description: Network or invitation attempt budget exhausted; honor Retry-After.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
+        '503':
+          description: Durable onboarding is unavailable.
+          content:
+            application/problem+json:
+              schema: {$ref: '#/components/schemas/ErrorResponse'}
   /agent/conversations:
     get:
-      summary: List AI-agent conversations visible to the authenticated operator.
+      summary: List AI-agent conversations visible to the authenticated principal.
       tags: ["Ui", "Conversations"]
       description: >
-        Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor.
+        Returns conversations in immutable `created_at DESC, id DESC` order. The opaque cursor is bound to the authenticated scope, all filters, this ordering, and the requested page size. Legacy decimal offset cursors are rejected; restart pagination without a cursor. Ordinary users must select an authorized project. Their chats are private to the creator; authorized log readers may also read canonical system diagnosis reports. Access and environment restrictions are checked on every request, before pagination.
 
       operationId: listAgentConversations
       parameters:
@@ -1611,9 +1671,17 @@ paths:
         content:
           application/json:
             schema:
-              example: {"example": "createAgentConversation request"}
               type: object
-              additionalProperties: true
+              additionalProperties: false
+              properties:
+                title: {type: string}
+                project_id: {type: string, description: Required for ordinary tenant users.}
+                service_id: {type: string}
+                environment_id: {type: string, description: Canonical environment binding for scoped tools.}
+                model: {type: string}
+                metadata: {type: object, additionalProperties: true, description: Reserved midnight.* keys are assigned by the server.}
+                system_preamble: {type: string, description: Conversation instructions; they do not confer tool or tenant authority.}
+            example: {"environment_id": "env_demo", "metadata": {"example": "createAgentConversation request"}, "model": "example-model", "project_id": "prj_demo", "service_id": "svc_demo", "title": "example-title"}
       responses:
         '201':
           description: Conversation created.
@@ -1631,6 +1699,8 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
   /agent/conversations/{conversation_id}:
     get:
       summary: Return one AI-agent conversation.
@@ -10863,7 +10933,7 @@ components:
           type: string
         code:
           type: string
-          enum: [INTERNAL_ERROR, NOT_IMPLEMENTED, CAPABILITY_UNAVAILABLE, AGENT_NOT_CONFIGURED, METHOD_NOT_ALLOWED, OPERATION_NOT_FOUND, OPERATION_INVALID_TRANSITION, CURSOR_INVALID, PAGINATION_LIMIT_EXCEEDED, AUTH_TOKEN_HEADER_INVALID, AUTH_REQUIRED_MISSING, AUTH_CREDENTIALS_INVALID, AUTH_SESSION_INVALID, AUTHORIZATION_DENIED, AUTH_RATE_LIMITED, AUTH_OPERATOR_RECOVERY_REQUIRED, REQUEST_RATE_LIMITED, IDEMPOTENCY_KEY_INVALID, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY, IDEMPOTENCY_REQUEST_IN_PROGRESS, RESOURCE_NOT_FOUND, RESOURCE_VALIDATION_FAILED, RESOURCE_CONFLICT, PRECONDITION_REQUIRED, PRECONDITION_FAILED, SOURCE_ARTIFACT_QUOTA_EXCEEDED, SOURCE_ARTIFACT_UPLOAD_BACKPRESSURE, BACKUP_OFFHOST_MISSING, BACKUP_DESTINATION_WRITE_FAILED, RESTORE_PLAN_SERIALIZATION_FAILED, DEPLOY_JOB_ENQUEUE_FAILED, DEPLOY_SOURCE_REF_UNSUPPORTED, DEPLOY_CANCEL_QUEUE_UNAVAILABLE, DEPLOY_CANCEL_UNSAFE, LOG_QUERY_INVALID, LOG_STORE_UNAVAILABLE, MFA_REQUIRED, MFA_INVALID_CODE, VOLUME_ATTACHED, SERVICE_DELETE_RUNNING, SERVICE_DELETE_BLOCKED, VOLUME_RESIZE_DOWN_UNSUPPORTED, VERSION_SKEW_REJECTED, AGENT_CLOCK_SKEW, AGENT_HEARTBEAT_REPLAY, AGENT_HEARTBEAT_EXPIRED, AGENT_HEARTBEAT_TAMPERED, AGENT_STATUS_REPORT_REPLAY, AGENT_STATUS_REPORT_EXPIRED, AGENT_STATUS_REPORT_TAMPERED]
+          enum: [INTERNAL_ERROR, NOT_IMPLEMENTED, CAPABILITY_UNAVAILABLE, AGENT_NOT_CONFIGURED, METHOD_NOT_ALLOWED, OPERATION_NOT_FOUND, OPERATION_INVALID_TRANSITION, CURSOR_INVALID, PAGINATION_LIMIT_EXCEEDED, AUTH_TOKEN_HEADER_INVALID, AUTH_REQUIRED_MISSING, AUTH_CREDENTIALS_INVALID, AUTH_SESSION_INVALID, AUTHORIZATION_DENIED, AUTH_RATE_LIMITED, INVITATION_ACCOUNT_EXISTS, AUTH_OPERATOR_RECOVERY_REQUIRED, REQUEST_RATE_LIMITED, IDEMPOTENCY_KEY_INVALID, IDEMPOTENCY_KEY_REQUIRED, IDEMPOTENCY_KEY_REUSED, IDEMPOTENCY_KEY_REUSED_WITH_DIFFERENT_BODY, IDEMPOTENCY_REQUEST_IN_PROGRESS, RESOURCE_NOT_FOUND, RESOURCE_VALIDATION_FAILED, RESOURCE_CONFLICT, PRECONDITION_REQUIRED, PRECONDITION_FAILED, SOURCE_ARTIFACT_QUOTA_EXCEEDED, SOURCE_ARTIFACT_UPLOAD_BACKPRESSURE, BACKUP_OFFHOST_MISSING, BACKUP_DESTINATION_WRITE_FAILED, RESTORE_PLAN_SERIALIZATION_FAILED, DEPLOY_JOB_ENQUEUE_FAILED, DEPLOY_SOURCE_REF_UNSUPPORTED, DEPLOY_CANCEL_QUEUE_UNAVAILABLE, DEPLOY_CANCEL_UNSAFE, LOG_QUERY_INVALID, LOG_STORE_UNAVAILABLE, MFA_REQUIRED, MFA_INVALID_CODE, VOLUME_ATTACHED, SERVICE_DELETE_RUNNING, SERVICE_DELETE_BLOCKED, VOLUME_RESIZE_DOWN_UNSUPPORTED, VERSION_SKEW_REJECTED, AGENT_CLOCK_SKEW, AGENT_HEARTBEAT_REPLAY, AGENT_HEARTBEAT_EXPIRED, AGENT_HEARTBEAT_TAMPERED, AGENT_STATUS_REPORT_REPLAY, AGENT_STATUS_REPORT_EXPIRED, AGENT_STATUS_REPORT_TAMPERED]
         request_id:
           type: string
         docs_url:

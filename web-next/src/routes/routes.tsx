@@ -60,6 +60,7 @@ import { CLIReferenceDocs } from "@/pages/docs/CLIReferenceDocs";
 import { DocsHome } from "@/pages/docs/DocsHome";
 import { Login } from "@/pages/Login";
 import { Setup } from "@/pages/Setup";
+import { InvitationOnboarding } from "@/pages/InvitationOnboarding";
 import { presentError } from "@/lib/errorPresentation";
 import {
   normalizeConfigureSection,
@@ -73,7 +74,7 @@ import { useProjectAccess } from "@/components/panels/automation-tokens/api";
 // /login and /setup render outside the authenticated shell: both run before a
 // human session exists, and /setup runs before the installation has any account
 // at all.
-const UNAUTHENTICATED_ROUTES = new Set(["/login", "/setup"]);
+const UNAUTHENTICATED_ROUTES = new Set(["/login", "/setup", "/invite"]);
 
 function RouterRoot() {
   const pathname = useRouterState({ select: (state) => state.location.pathname });
@@ -184,6 +185,12 @@ function RootLayout() {
     : search.service;
 
   const projectsQ = useProjects();
+  const agentAvailable = isAgentRouteAvailable(
+    auth.operatorFeaturesAvailable,
+    auth.state.status === "human",
+    projectId,
+    projectsQ.data,
+  );
   const environmentsQ = useEnvironments(projectId);
   const defaultEnvironmentId = selectDefaultEnvironmentId(environmentsQ.data);
 
@@ -254,7 +261,7 @@ function RootLayout() {
         />
       }
       routeContext={routeContext}
-      agentEnabled={auth.operatorFeaturesAvailable}
+      agentEnabled={agentAvailable}
       topBar={
         <>
           <TopNav
@@ -271,6 +278,7 @@ function RootLayout() {
             identity={humanIdentity}
             authMode={authMode}
             operatorFeaturesAvailable={auth.operatorFeaturesAvailable}
+            agentAvailable={agentAvailable}
             onLogout={authMode ? () => void logout() : undefined}
             logoutError={
               auth.sessionActionError
@@ -904,7 +912,20 @@ const projectSettingsRoute = new Route({
   },
 });
 
+// Tenant chat is available only after the authorized project collection
+// resolves. Installation-wide controls keep their separate authority flag.
+export function isAgentRouteAvailable(operator: boolean, human: boolean, projectId: string | undefined, projects: Pick<Project, "id">[] | undefined): boolean {
+  return operator || (human && Boolean(projectId) && Boolean(projects?.some((project) => project.id === projectId)));
+}
+
+const invitationOnboardingRoute = new Route({
+  getParentRoute: () => rootRoute,
+  path: "/invite",
+  component: InvitationOnboarding,
+});
+
 const routeTree = rootRoute.addChildren([
+  invitationOnboardingRoute,
   loginRoute,
   setupRoute,
   indexRoute,

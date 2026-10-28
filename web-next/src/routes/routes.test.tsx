@@ -1,11 +1,20 @@
 import { describe, expect, it } from "vitest";
 import {
   isHumanProjectRouteAdmitted,
+  isAgentRouteAvailable,
   projectRouteRequiresEnvironment,
   resolveRequestedConfigureSection,
 } from "./routes";
 
 describe("human project route admission", () => {
+  it("shows tenant chat only in a resolved authorized project while preserving trusted global access", () => {
+    expect(isAgentRouteAvailable(false, true, "prj_1", [{ id: "prj_1" }])).toBe(true);
+    expect(isAgentRouteAvailable(false, true, "prj_other", [{ id: "prj_1" }])).toBe(false);
+    expect(isAgentRouteAvailable(false, true, "prj_1", undefined)).toBe(false);
+    expect(isAgentRouteAvailable(false, true, undefined, [{ id: "prj_1" }])).toBe(false);
+    expect(isAgentRouteAvailable(false, false, "prj_1", [{ id: "prj_1" }])).toBe(false);
+    expect(isAgentRouteAvailable(true, false, undefined, undefined)).toBe(true);
+  });
   it("admits tenant project administration and the service inspector", () => {
     expect(isHumanProjectRouteAdmitted("/new")).toBe(true);
     expect(isHumanProjectRouteAdmitted("/usage")).toBe(true);

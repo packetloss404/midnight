@@ -57,6 +57,8 @@ export interface Conversation {
   title: string;
   project_id?: string | null;
   service_id?: string | null;
+  actor_id?: string;
+  metadata?: Record<string, unknown>;
   created_at: string;
   model?: string;
 }
@@ -65,6 +67,7 @@ export interface CreateConversationInput {
   title?: string;
   project_id?: string | null;
   service_id?: string | null;
+  environment_id?: string | null;
 }
 
 export interface PostMessageInput {

@@ -76,6 +76,7 @@ type TenantSourceArtifact struct {
 // potentially large request body. Final authorization is always repeated in
 // the accepting SERIALIZABLE transaction.
 type TenantSourceUpPreflightRequest struct {
+	AgentSource     *TenantAgentSourceConstraints
 	Principal       identity.Principal
 	Session         identity.Session
 	ServiceID       orailtypes.ID
@@ -109,6 +110,7 @@ type TenantSourceUpPublishRequest struct {
 // is never placed in the source URI, worker payload, operation event, or audit
 // body.
 type TenantSourceUpRequest struct {
+	AgentSource   *TenantAgentSourceConstraints
 	Principal     identity.Principal
 	Session       identity.Session
 	ServiceID     orailtypes.ID
@@ -135,6 +137,7 @@ type TenantUpIntakeCoordinator interface {
 }
 
 type tenantDeployTransactionRequest struct {
+	AgentSource *TenantAgentSourceConstraints
 	Principal   identity.Principal
 	Session     identity.Session
 	ServiceID   orailtypes.ID
@@ -372,6 +375,9 @@ func (c *PostgresTenantDeployIntakeCoordinator) deployTenantIntentInTx(
 	workspaceRole := authorization.WorkspaceRole
 	projectRole := authorization.ProjectRole
 	service := authorization.Service
+	if err := validateTenantAgentSourceInTx(mutationCtx, tx, request.Principal, authorization, request.Intent.EnvironmentID, request.AgentSource); err != nil {
+		return TenantDeployIntakeResult{}, err
+	}
 
 	if request.Artifact != nil {
 		if request.Admission == nil {
@@ -386,6 +392,7 @@ func (c *PostgresTenantDeployIntakeCoordinator) deployTenantIntentInTx(
 			Key:             request.Key,
 			ExpectedDigest:  request.Artifact.Digest,
 			CompressedBytes: request.Artifact.CompressedBytes,
+			AgentSource:     request.AgentSource,
 		})
 		if err != nil {
 			return TenantDeployIntakeResult{}, err
@@ -670,6 +677,21 @@ func (c *PostgresTenantDeployIntakeCoordinator) deployTenantIntentInTx(
 	)
 	if err != nil {
 		return TenantDeployIntakeResult{}, err
+	}
+	if request.AgentSource != nil {
+		// The inline tool's expected config describes this logical build.
+		// Capture it with variable-version metadata before exposing work;
+		// a later desired-config edit must not change an accepted build.
+		snapshot, err := serviceconfig.NewStore(c.Pool).ReplaceDeploymentSnapshotInTx(
+			mutationCtx, tx, commit.Deployment.ID, projectID,
+			intent.EnvironmentID, string(service.ID),
+		)
+		if err != nil {
+			return TenantDeployIntakeResult{}, err
+		}
+		if snapshot.ConfigVersion != request.AgentSource.ConfigVersion {
+			return TenantDeployIntakeResult{}, ErrResourcePreconditionFailed
+		}
 	}
 	if generatedRouteID != "" {
 		if err := bindDeploymentRouteIntentInTx(

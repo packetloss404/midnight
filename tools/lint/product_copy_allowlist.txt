@@ -31,3 +31,6 @@ web-next/src/components/panels/ServiceOverview.tsx | Legacy operation record
 # ids, for copying into a support request or an API call.
 web-next/src/components/panels/DeploymentDetail.tsx | Operation
 web-next/src/components/panels/DeploymentDetail.tsx | Operation state
+
+# SSE protocol frame name parsed by the diagnosis client, never rendered copy.
+web-next/src/components/panels/diagnosis/api.ts | event: operation

@@ -115,6 +115,13 @@ describe('TopNav', () => {
     expect(screen.queryByTestId('open-agent-button')).toBeNull();
   });
 
+  it("offers admitted tenant chat independently of installation controls", () => {
+    const { rerender } = render(<TopNav pathname="/projects/prj_1" authMode="human" operatorFeaturesAvailable={false} agentAvailable />);
+    expect(screen.getByTestId("open-agent-button")).toBeInTheDocument();
+    rerender(<TopNav pathname="/projects/prj_1" authMode="human" operatorFeaturesAvailable={false} agentAvailable={false} />);
+    expect(screen.queryByTestId("open-agent-button")).toBeNull();
+  });
+
   it("offers an explicit local-only logout after revoke failure", () => {
     const onLocalLogout = vi.fn();
     render(
